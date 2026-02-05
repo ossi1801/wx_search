@@ -150,7 +150,7 @@ std::vector<std::string> search_with_args(std::vector<std::string> args, wxStati
     for (auto const &dir_entry:
          fs::recursive_directory_iterator(fs::current_path())) {
         std::string x = dir_entry.path().string();
-        std::string x_san =sanitize(x, fs::current_path());
+        std::string x_san =sanitize(x, fs::current_path().string());
         if (in_array(x_san, args))
             tmp.push_back(" ->" + x_san);
         else
