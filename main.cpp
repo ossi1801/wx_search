@@ -116,12 +116,6 @@ void MainFrame::OnTextEnter(wxCommandEvent &evt){
 		//label->SetLabel(x);
 
 		//std::cout<< wxGetEmailAddress()<<std::endl;
-        // Example actions:
-        // - Add to list
-        // - Send to server
-        // - Process command
-        // - etc.
-
         // Optional: clear after submit (common in chat/input boxes)
         // m_txtInput->Clear();
     }
@@ -156,10 +150,11 @@ std::vector<std::string> search_with_args(std::vector<std::string> args, wxStati
     for (auto const &dir_entry:
          fs::recursive_directory_iterator(fs::current_path())) {
         std::string x = dir_entry.path().string();
-        if (in_array(x, args))
-            tmp.push_back(" ->" + sanitize(x, fs::current_path()));
+        std::string x_san =sanitize(x, fs::current_path());
+        if (in_array(x_san, args))
+            tmp.push_back(" ->" + x_san);
         else
-            tmp.push_back(" X" + sanitize(x, fs::current_path()));
+            tmp.push_back(" X" + x_san);
     }
     return tmp;
 }
