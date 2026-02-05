@@ -1,8 +1,10 @@
-#include <wx/wx.h> 
+#include <wx/wx.h>
+#include <wx/listctrl.h>
 #include <algorithm>
 #include <filesystem>
 #include <iostream>
 #include <vector>
+#include <string>
 
 class MyApp : public wxApp
 {
@@ -21,12 +23,14 @@ public:
 private:
     wxDECLARE_EVENT_TABLE();
 	wxTextCtrl* textBox;
-	wxStaticText* label;
+	wxStaticText* label_current_path;
+	wxStaticText* label_item_count;
+    wxListCtrl *list;
 };
 
 //Filesystem search interface
 //bool in_array(const std::string &value, const std::vector<std::string> &array); 
-std::vector<std::string> search_with_args(std::vector<std::string> args);
+std::vector<std::string> search_with_args(std::vector<std::string> args,wxStaticText* label);
 
 enum
 {
@@ -48,6 +52,7 @@ bool MyApp::OnInit()
 MyFrame::MyFrame(const wxString& title)
     : wxFrame(nullptr, wxID_ANY, title, wxDefaultPosition, wxSize(450, 340))
 {
+    SetSize(800, 600);
     wxMenu* menuFile = new wxMenu;
     menuFile->Append(ID_About, "&About\tCtrl-A", "Show about dialog");
     menuFile->AppendSeparator();
@@ -55,18 +60,24 @@ MyFrame::MyFrame(const wxString& title)
 
     wxMenuBar* menuBar = new wxMenuBar;
     menuBar->Append(menuFile, "&File");
-
     SetMenuBar(menuBar);
-
     CreateStatusBar();
-    SetStatusText("Welcome to wxWidgets!");
+    SetStatusText("Wx Search");
 
     Centre();
 	wxPanel* panel = new wxPanel(this);
-	textBox = new wxTextCtrl(panel,wxID_ANY,"Input field", wxPoint(100,100),wxSize(200,200),wxTE_LEFT|wxTE_PROCESS_ENTER);
-	textBox->Bind(wxEVT_TEXT_ENTER, &MyFrame::OnTextEnter,this);
-	label = new wxStaticText(panel, wxID_ANY, "",wxPoint(40, 100));
+	textBox = new wxTextCtrl(panel,wxID_ANY,"Input field", wxPoint(0,0),wxSize(200,50),wxTE_LEFT|wxTE_PROCESS_ENTER);
+    textBox->Bind(wxEVT_TEXT_ENTER, &MyFrame::OnTextEnter,this);
+    label_current_path = new wxStaticText(panel, wxID_ANY, "",wxPoint(210, 0));
 
+    //result list
+    list = new wxListCtrl(panel,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxLC_REPORT);
+    list->SetSize(790,550);
+    list->SetPosition(wxPoint(0,55));
+    list->InsertColumn(0, wxString::Format("File"));
+    list->SetColumnWidth(0, 600);
+    list->InsertColumn(1, wxString::Format("Description"));
+    list->SetColumnWidth(1, 200);
 }
 
 void MyFrame::OnAbout(wxCommandEvent& WXUNUSED(event))
@@ -77,6 +88,7 @@ void MyFrame::OnAbout(wxCommandEvent& WXUNUSED(event))
 
 void MyFrame::OnQuit(wxCommandEvent& WXUNUSED(event))
 {
+    //delete MyApp;
     Close(true);
 }
 void MyFrame::OnTextEnter(wxCommandEvent &evt){
@@ -93,11 +105,17 @@ void MyFrame::OnTextEnter(wxCommandEvent &evt){
 		std::cout <<text<< std::endl;
 		std::vector<std::string> test;
 		test.push_back(text.ToStdString());
-		test = search_with_args(test);
-		wxStdString x;
-		x = wxString::FromUTF8( test[0]	);
-		
-		label->SetLabel(x);
+		test = search_with_args(test,label_current_path);
+
+        list->DeleteAllItems();
+        for (const auto &s : test) {
+            list->InsertItem(0,s);
+        }
+		//wxStdString x;
+		//x = wxString::FromUTF8( test[0]	);
+		//label->SetLabel(x);
+
+		//std::cout<< wxGetEmailAddress()<<std::endl;
         // Example actions:
         // - Add to list
         // - Send to server
@@ -120,27 +138,28 @@ bool in_array(const std::string &value, const std::vector<std::string> &array) {
   }
   return false;
 }
-std::vector<std::string> search_with_args(std::vector<std::string> args){
-//for (int i = 0; i < argc; i++) {
-//   std::cout << argv[i] << std::endl;
-//  }
-  // sets the path to /tmp
-  // std::filesystem::current_path(std::filesystem::temp_directory_path());
-  std::cout << fs::current_path() << std::endl;
 
-  std::vector<std::string> tmp;
-  // Iterate over the std::filesystem::directory_entry elements using `auto`
-
-  for (auto const &dir_entry :
-       fs::recursive_directory_iterator(fs::current_path())) {
-		  std::string x=  dir_entry.path().string();
-    if (in_array(x, args))
-       tmp.push_back(" ->"+x+'\n');
-    else
-       tmp.push_back(" X"+x+'\n');
-
-	//std::cout << " ->" << dir_entry << '\n';
-    //std::cout << " X " << dir_entry << '\n';
-  }
-return tmp;
+std::vector<std::string> search_with_args(std::vector<std::string> args, wxStaticText *label) {
+    //for (int i = 0; i < argc; i++) {
+    //   std::cout << argv[i] << std::endl;
+    //  }
+    // sets the path to /tmp
+    // std::filesystem::current_path(std::filesystem::temp_directory_path());
+    // std::cout << fs::current_path() << std::endl;
+    label->SetLabel(fs::current_path().string());
+    std::vector<std::string> tmp;
+    // Iterate over the std::filesystem::directory_entry elements using `auto`
+    auto sanitize = [](std::string wholepath, std::string current_path) {
+        int start_position_to_erase = wholepath.find(current_path);
+        return wholepath.erase(start_position_to_erase, current_path.length());
+    };
+    for (auto const &dir_entry:
+         fs::recursive_directory_iterator(fs::current_path())) {
+        std::string x = dir_entry.path().string();
+        if (in_array(x, args))
+            tmp.push_back(" ->" + sanitize(x, fs::current_path()));
+        else
+            tmp.push_back(" X" + sanitize(x, fs::current_path()));
+    }
+    return tmp;
 }
