@@ -6,16 +6,16 @@
 #include <vector>
 #include <string>
 
-class MyApp : public wxApp
+class WxSearch : public wxApp
 {
 public:
     virtual bool OnInit() override;
 };
 
-class MyFrame : public wxFrame
+class MainFrame : public wxFrame
 {
 public:
-    MyFrame(const wxString& title);
+    MainFrame(const wxString& title);
     void OnAbout(wxCommandEvent& event);
     void OnQuit(wxCommandEvent& event);
     void OnTextEnter(wxCommandEvent& event);
@@ -38,18 +38,18 @@ enum
     ID_About = wxID_ABOUT
 };
 
-wxBEGIN_EVENT_TABLE(MyFrame, wxFrame)
-    EVT_MENU(ID_Quit,  MyFrame::OnQuit)
-    EVT_MENU(ID_About, MyFrame::OnAbout)
+wxBEGIN_EVENT_TABLE(MainFrame, wxFrame)
+    EVT_MENU(ID_Quit,  MainFrame::OnQuit)
+    EVT_MENU(ID_About, MainFrame::OnAbout)
 wxEND_EVENT_TABLE()
 
-bool MyApp::OnInit()
+bool WxSearch::OnInit()
 {
-    MyFrame* frame = new MyFrame("wxWidgets Hello World");
+    MainFrame* frame = new MainFrame("wxWidgets Hello World");
     frame->Show(true);
     return true;
 }
-MyFrame::MyFrame(const wxString& title)
+MainFrame::MainFrame(const wxString& title)
     : wxFrame(nullptr, wxID_ANY, title, wxDefaultPosition, wxSize(450, 340))
 {
     SetSize(800, 600);
@@ -67,7 +67,7 @@ MyFrame::MyFrame(const wxString& title)
     Centre();
 	wxPanel* panel = new wxPanel(this);
 	textBox = new wxTextCtrl(panel,wxID_ANY,"Input field", wxPoint(0,0),wxSize(200,50),wxTE_LEFT|wxTE_PROCESS_ENTER);
-    textBox->Bind(wxEVT_TEXT_ENTER, &MyFrame::OnTextEnter,this);
+    textBox->Bind(wxEVT_TEXT_ENTER, &MainFrame::OnTextEnter,this);
     label_current_path = new wxStaticText(panel, wxID_ANY, "",wxPoint(210, 0));
 
     //result list
@@ -80,18 +80,18 @@ MyFrame::MyFrame(const wxString& title)
     list->SetColumnWidth(1, 200);
 }
 
-void MyFrame::OnAbout(wxCommandEvent& WXUNUSED(event))
+void MainFrame::OnAbout(wxCommandEvent& WXUNUSED(event))
 {
     wxMessageBox("This is a minimal wxWidgets sample\nbuilt cross-platform!",
                  "About Hello World", wxOK | wxICON_INFORMATION);
 }
 
-void MyFrame::OnQuit(wxCommandEvent& WXUNUSED(event))
+void MainFrame::OnQuit(wxCommandEvent& WXUNUSED(event))
 {
     //delete MyApp;
     Close(true);
 }
-void MyFrame::OnTextEnter(wxCommandEvent &evt){
+void MainFrame::OnTextEnter(wxCommandEvent &evt){
 
 
     wxString text = textBox->GetValue();
@@ -128,7 +128,7 @@ void MyFrame::OnTextEnter(wxCommandEvent &evt){
  
 }
 
-wxIMPLEMENT_APP(MyApp);
+wxIMPLEMENT_APP(WxSearch);
 
 namespace fs = std::filesystem;
 bool in_array(const std::string &value, const std::vector<std::string> &array) {
