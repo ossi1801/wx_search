@@ -29,7 +29,7 @@ private:
 };
 
 //Filesystem search interface
-//bool in_array(const std::string &value, const std::vector<std::string> &array); 
+//bool in_array(const std::string &value, const std::vector<std::string> &array);
 std::vector<std::string> search_with_args(std::vector<std::string> args,wxStaticText* label);
 
 enum
@@ -119,7 +119,7 @@ void MainFrame::OnTextEnter(wxCommandEvent &evt){
         // Optional: clear after submit (common in chat/input boxes)
         // m_txtInput->Clear();
     }
- 
+
 }
 
 wxIMPLEMENT_APP(WxSearch);
@@ -152,9 +152,18 @@ std::vector<std::string> search_with_args(std::vector<std::string> args, wxStati
         std::string x = dir_entry.path().string();
         std::string x_san =sanitize(x, fs::current_path().string());
         if (in_array(x_san, args))
-            tmp.push_back(" ->" + x_san);
-        else
-            tmp.push_back(" X" + x_san);
+            tmp.push_back(x_san);//tmp.push_back(" ->" + x_san);
+        //else
+        //    tmp.push_back(" X" + x_san);
+    }
+    //if no results show popup
+    std::string searchvalues;
+    for (int i = 0; i < args.size(); ++i) {
+        searchvalues += args[i] + " ";
+    }
+
+    if (tmp.empty()) {
+        wxMessageBox("No files found with search parameter: \n"+searchvalues,"Info");
     }
     return tmp;
 }
