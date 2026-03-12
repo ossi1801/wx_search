@@ -1,5 +1,6 @@
 #include <wx/wx.h>
 #include <wx/listctrl.h>
+#include <wx/ribbon/buttonbar.h>
 #include <algorithm>
 #include <filesystem>
 #include <iostream>
@@ -19,13 +20,21 @@ public:
     void OnAbout(wxCommandEvent& event);
     void OnQuit(wxCommandEvent& event);
     void OnTextEnter(wxCommandEvent& event);
+    void CreateButton(const std::string &txt);
+    void CreateButtonBar();
 
 private:
+    wxPanel* panel; // working area
     wxDECLARE_EVENT_TABLE();
-	wxTextCtrl* textBox;
+	wxTextCtrl* txtBox_Search;
 	wxStaticText* label_current_path;
 	wxStaticText* label_item_count;
     wxListCtrl *list;
+
+    //Navigational bar
+    //wxScrolledWindow* scroll;
+    std::vector<wxButton*> buttonBar;
+    //wxBoxSizer* sizer;
 };
 
 //Filesystem search interface
@@ -65,9 +74,10 @@ MainFrame::MainFrame(const wxString& title)
     SetStatusText("Wx Search");
 
     Centre();
-	wxPanel* panel = new wxPanel(this);
-	textBox = new wxTextCtrl(panel,wxID_ANY,"Input field", wxPoint(0,0),wxSize(200,50),wxTE_LEFT|wxTE_PROCESS_ENTER);
-    textBox->Bind(wxEVT_TEXT_ENTER, &MainFrame::OnTextEnter,this);
+	panel = new wxPanel(this);
+	txtBox_Search = new wxTextCtrl(panel,wxID_ANY,"", wxPoint(this->m_width-10-200,0),wxSize(200,50),wxTE_LEFT|wxTE_PROCESS_ENTER);
+    txtBox_Search->SetHint("Click here to search");
+    txtBox_Search->Bind(wxEVT_TEXT_ENTER, &MainFrame::OnTextEnter,this);
     label_current_path = new wxStaticText(panel, wxID_ANY, "",wxPoint(210, 0));
 
     //result list
@@ -78,6 +88,8 @@ MainFrame::MainFrame(const wxString& title)
     list->SetColumnWidth(0, 600);
     list->InsertColumn(1, wxString::Format("Description"));
     list->SetColumnWidth(1, 200);
+
+    CreateButton("TestiPath");
 }
 
 void MainFrame::OnAbout(wxCommandEvent& WXUNUSED(event))
@@ -94,7 +106,7 @@ void MainFrame::OnQuit(wxCommandEvent& WXUNUSED(event))
 void MainFrame::OnTextEnter(wxCommandEvent &evt){
 
 
-    wxString text = textBox->GetValue();
+    wxString text = txtBox_Search->GetValue();
 
    	if (text.IsEmpty())
     {
@@ -122,7 +134,24 @@ void MainFrame::OnTextEnter(wxCommandEvent &evt){
 
 }
 
+//TODO: create a button bar that shows that allows you to click current path and change it
+void MainFrame::CreateButton(const std::string &txt) {
+    auto* btn = new wxButton(panel, wxID_ANY, txt);
+    btn->Bind(wxEVT_BUTTON, [](wxCommandEvent& e) {
+        // e.GetEventObject() returns the button that was clicked
+        wxButton* b = static_cast<wxButton*>(e.GetEventObject());
+        wxMessageBox("Clicked: " + b->GetLabel());
+    });
+
+    buttonBar.push_back(btn);
+
+}
+
+
+
 wxIMPLEMENT_APP(WxSearch);
+
+
 
 namespace fs = std::filesystem;
 bool in_array(const std::string &value, const std::vector<std::string> &array) {
@@ -134,12 +163,6 @@ bool in_array(const std::string &value, const std::vector<std::string> &array) {
 }
 
 std::vector<std::string> search_with_args(std::vector<std::string> args, wxStaticText *label) {
-    //for (int i = 0; i < argc; i++) {
-    //   std::cout << argv[i] << std::endl;
-    //  }
-    // sets the path to /tmp
-    // std::filesystem::current_path(std::filesystem::temp_directory_path());
-    // std::cout << fs::current_path() << std::endl;
     label->SetLabel(fs::current_path().string());
     std::vector<std::string> tmp;
     // Iterate over the std::filesystem::directory_entry elements using `auto`
@@ -152,9 +175,7 @@ std::vector<std::string> search_with_args(std::vector<std::string> args, wxStati
         std::string x = dir_entry.path().string();
         std::string x_san =sanitize(x, fs::current_path().string());
         if (in_array(x_san, args))
-            tmp.push_back(x_san);//tmp.push_back(" ->" + x_san);
-        //else
-        //    tmp.push_back(" X" + x_san);
+            tmp.push_back(x_san);
     }
     //if no results show popup
     std::string searchvalues;
