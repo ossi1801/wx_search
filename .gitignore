@@ -1,0 +1,5 @@
+/build/
+/build_windows/
+/compile_commands.json
+/build-host/
+/build-flatpak/
