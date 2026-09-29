@@ -30,6 +30,7 @@ std::vector<Item> apps, desktopItems;
 bool registered = false, positioning = false, fullscreen = false;
 std::vector<HWND> taskButtons;
 HWND startButton{}, filesButton{}, moreButton{}, clockButton{};
+HICON startIcon{}, filesIcon{};
 void layoutButtons();
 UINT taskbarCreated{};
 HFONT font{};
@@ -504,6 +505,66 @@ LRESULT CALLBACK taskButtonProc(HWND button, UINT message, WPARAM w, LPARAM l, U
     return DefSubclassProc(button, message, w, l);
 }
 
+HICON makeStartIcon(int size) {
+    BITMAPINFO dib{}; dib.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    dib.bmiHeader.biWidth = size; dib.bmiHeader.biHeight = -size;
+    dib.bmiHeader.biPlanes = 1; dib.bmiHeader.biBitCount = 32;
+    DWORD* pixels = nullptr;
+    HBITMAP color = CreateDIBSection(nullptr, &dib, DIB_RGB_COLORS,
+        reinterpret_cast<void**>(&pixels), nullptr, 0);
+    if (!color) return nullptr;
+    std::fill(pixels, pixels + size * size, 0);
+    const int stride = ((size + 15) / 16) * 2;
+    std::vector<BYTE> maskBits(stride * size, 0xff);
+    const int margin = std::max(1, size / 12), gap = std::max(2, size / 12);
+    const int pane = (size - 2 * margin - gap) / 2;
+    // Four blue panes form a Windows-style Start glyph at the current DPI.
+    for (int row = 0; row < 2; ++row) for (int column = 0; column < 2; ++column) {
+        const int left = margin + column * (pane + gap), top = margin + row * (pane + gap);
+        for (int y = top; y < top + pane; ++y) for (int x = left; x < left + pane; ++x) {
+            pixels[y * size + x] = 0xff0078d7;
+            maskBits[y * stride + x / 8] &= static_cast<BYTE>(~(0x80 >> (x % 8)));
+        }
+    }
+    HBITMAP mask = CreateBitmap(size, size, 1, 1, maskBits.data());
+    ICONINFO info{}; info.fIcon = TRUE; info.hbmColor = color; info.hbmMask = mask;
+    HICON icon = mask ? CreateIconIndirect(&info) : nullptr;
+    if (mask) DeleteObject(mask);
+    DeleteObject(color);
+    return icon;
+}
+
+void setLauncherIcons() {
+    const int size = MulDiv(24, dpi, 96);
+    startIcon = makeStartIcon(size);
+    SHSTOCKICONINFO stock{}; stock.cbSize = sizeof(stock);
+    if (SUCCEEDED(SHGetStockIconInfo(SIID_FOLDER, SHGSI_ICON | SHGSI_LARGEICON, &stock))) {
+        filesIcon = static_cast<HICON>(CopyImage(stock.hIcon, IMAGE_ICON, size, size, 0));
+        if (filesIcon) DestroyIcon(stock.hIcon);
+        else filesIcon = stock.hIcon;
+    }
+    if (!filesIcon) filesIcon = static_cast<HICON>(LoadImageW(GetModuleHandleW(nullptr), L"APP_ICON",
+        IMAGE_ICON, size, size, 0));
+    HWND tips = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr,
+        WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX, CW_USEDEFAULT, CW_USEDEFAULT,
+        CW_USEDEFAULT, CW_USEDEFAULT, bar, nullptr, GetModuleHandleW(nullptr), nullptr);
+    auto attach = [&](HWND button, HICON icon, const wchar_t* label) {
+        if (icon) {
+            SetWindowLongPtrW(button, GWL_STYLE, GetWindowLongPtrW(button, GWL_STYLE) | BS_ICON);
+            SendMessageW(button, BM_SETIMAGE, IMAGE_ICON, reinterpret_cast<LPARAM>(icon));
+        }
+        // Keep the window text for accessibility; tooltips label the visible icons.
+        if (tips) {
+            TOOLINFOW tool{}; tool.cbSize = sizeof(tool); tool.hwnd = bar;
+            tool.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+            tool.uId = reinterpret_cast<UINT_PTR>(button); tool.lpszText = const_cast<wchar_t*>(label);
+            SendMessageW(tips, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&tool));
+        }
+    };
+    attach(startButton, startIcon, L"Start");
+    attach(filesButton, filesIcon, L"Files");
+}
+
 HWND makeButton(int id, const wchar_t* title, bool task = false) {
     HWND button = CreateWindowExW(0, L"BUTTON", title,
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | (task ? BS_CHECKBOX | BS_PUSHLIKE : BS_PUSHBUTTON),
@@ -620,6 +681,11 @@ LRESULT CALLBACK barProc(HWND window, UINT message, WPARAM w, LPARAM l) {
             SystemParametersInfoW(SPI_SETWORKAREA, 0, &savedWorkArea, SPIF_SENDCHANGE);
             manualWorkArea = false;
         }
+        SendMessageW(startButton, BM_SETIMAGE, IMAGE_ICON, 0);
+        SendMessageW(filesButton, BM_SETIMAGE, IMAGE_ICON, 0);
+        if (startIcon) DestroyIcon(startIcon);
+        if (filesIcon) DestroyIcon(filesIcon);
+        startIcon = filesIcon = nullptr;
         clearMenuIcons();
         explorer::background::destroy();
         if (desktop) DestroyWindow(desktop);
@@ -632,7 +698,7 @@ LRESULT CALLBACK barProc(HWND window, UINT message, WPARAM w, LPARAM l) {
 
 int runWindowsShell(HINSTANCE instance, bool smokeTest) {
     SetProcessDPIAware();
-    INITCOMMONCONTROLSEX controls{}; controls.dwSize = sizeof(controls); controls.dwICC = ICC_LISTVIEW_CLASSES;
+    INITCOMMONCONTROLSEX controls{}; controls.dwSize = sizeof(controls); controls.dwICC = ICC_LISTVIEW_CLASSES | ICC_STANDARD_CLASSES | ICC_BAR_CLASSES;
     InitCommonControlsEx(&controls);
     HANDLE mutex = CreateMutexW(nullptr, FALSE, L"Local\\RexplorerTaskbarCompanion");
     if (!mutex || GetLastError() == ERROR_ALREADY_EXISTS) { if (mutex) CloseHandle(mutex); return smokeTest ? 1 : 0; }
@@ -682,6 +748,7 @@ int runWindowsShell(HINSTANCE instance, bool smokeTest) {
         MessageBoxW(bar, L"The desktop background could not be created.", L"Explorer companion", MB_OK | MB_ICONERROR);
     startButton = makeButton(Start, L"Start");
     filesButton = makeButton(Files, L"Files");
+    setLauncherIcons();
     moreButton = makeButton(More, L"All");
     clockButton = makeButton(Clock, L"Clock");
     tray(); refreshTasks(); ShowWindow(bar, SW_SHOWNOACTIVATE);
@@ -698,6 +765,9 @@ int runWindowsShell(HINSTANCE instance, bool smokeTest) {
         passed = passed && explorer::background::visible();
         passed = passed && (registered || manualWorkArea) && rect.bottom == originalMonitor.rcMonitor.bottom && startButton && filesButton && moreButton && clockButton &&
             IsWindowVisible(bar) && !isTask(bar) && rect.bottom > rect.top;
+        passed = passed && startIcon && filesIcon &&
+            SendMessageW(startButton, BM_GETIMAGE, IMAGE_ICON, 0) == reinterpret_cast<LRESULT>(startIcon) &&
+            SendMessageW(filesButton, BM_GETIMAGE, IMAGE_ICON, 0) == reinterpret_cast<LRESULT>(filesIcon);
         MONITORINFO during{}; during.cbSize = sizeof(during);
         GetMonitorInfoW(MonitorFromWindow(bar, MONITOR_DEFAULTTOPRIMARY), &during);
         passed = passed && during.rcWork.bottom <= rect.top && EqualRect(&backgroundRect, &during.rcWork);

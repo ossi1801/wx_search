@@ -60,7 +60,7 @@ startup behavior and do not compile the Windows shell sources.
 
 ```text
 +-----------------------------------------------------------------------+
-| Start | Files | App window | App window | ... | All | Local time       |
+| Windows icon | Folder icon | App window | App window | ... | All | Local time       |
 +-----------------------------------------------------------------------+
 ```
 
@@ -72,6 +72,9 @@ startup behavior and do not compile the Windows shell sources.
 - Right-click a task button for that window's system menu. Elevated applications
   may reject commands from a non-elevated companion.
 - **All** lists every tracked window when the taskbar is crowded.
+- The **Start** taskbar button shows a blue Windows-style icon; **Files** shows
+  the standard Windows folder icon. Both scale with system DPI, keep accessible
+  names and show their labels as tooltips. **All** and the clock retain text.
 - **Files** launches this project's file browser.
 - **Start > Programs** lists user and public Start-menu shortcuts, grouped into
   pages. Each entry shows its shortcut's application icon, with a generic icon
