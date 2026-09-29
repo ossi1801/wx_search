@@ -2,8 +2,21 @@
 
 The optional `search.exe` starts a taskbar companion on the primary
 monitor, plus a non-interactive desktop background. Before creating the taskbar,
-it terminates `explorer.exe` processes in the current
-Windows session and waits for them to exit. This also closes Windows File Explorer
+it force-terminates `explorer.exe` processes in the current Windows session,
+waits for exit, retries startup races and checks that native taskbars are gone
+on all monitors. Direct termination falls back to the system `taskkill /F /PID`.
+The companion's own process is excluded even if its executable is renamed.
+
+Startup also force-stops the current-session applications from the supplied
+cleanup batch: Search, Start menu, Widgets, Phone Link, Game Bar, Teams, Skype,
+Edge WebView/update hosts and the listed inbox apps (Calculator, Photos, Mail,
+Music, Video, Recorder, Weather, News, Store, Feedback, Maps, Camera, Alarms,
+Notes, Snipping Tool and Paint). This can close open applications and unsaved
+work. TextInputHost is targeted only when it owns a window titled Copilot,
+Clipboard History or Emoji Panel, matching the script's prefix filters.
+Unavailable optional processes are ignored; failure to stop Explorer aborts
+startup. Defender and other services are not stopped, and no CMD window is
+launched. Cleanup runs once at startup. This also closes Windows File Explorer
 windows. Startup stops with an error if Explorer cannot be terminated. Browser-only
 launches do not stop Explorer, and a second taskbar instance exits before this step.
 It does not change the configured shell or install autostart entries.
@@ -11,7 +24,8 @@ It does not change the configured shell or install autostart entries.
 The taskbar clears Explorer's old screen reservation and aligns with the bottom
 of the primary monitor. When Explorer's appbar service is unavailable, it reserves
 the work area directly and releases that space on exit. Explorer is not restarted
-automatically; run `explorer.exe` from Task Manager's Run new task to restore it.
+automatically; exit the companion, then run `explorer.exe` from Task Manager's
+Run new task to restore it.
 
 ## Build and launch
 
@@ -87,8 +101,9 @@ startup behavior and do not compile the Windows shell sources.
 - The clock opens Windows date/time settings.
 - Ctrl+Alt+Space focuses the companion, then Tab/Shift+Tab and Space operate its
   native buttons. The shortcut is unavailable if another application owns it.
-- If Explorer is manually restarted, the companion adds its own icon to its
-  notification area. Double-click opens the browser; right-click offers desktop items and Exit companion.
+- If Explorer restarts and broadcasts `TaskbarCreated`, the companion stops it
+  again and reclaims its taskbar space. Exit the companion before restoring
+  Windows Explorer through Task Manager.
 - Closing the companion unregisters the appbar and removes its notification icon.
   A second instance exits without creating another panel.
 
@@ -97,7 +112,7 @@ startup behavior and do not compile the Windows shell sources.
 When available, the appbar reserves primary-monitor screen space through
 [SHAppBarMessage](https://learn.microsoft.com/en-us/windows/win32/shell/application-desktop-toolbars).
 It repositions after display changes, lowers itself on fullscreen-app
-notifications, and attempts to re-register the appbar and notification icon after
+notifications, and stops Explorer again before re-registering its bar after
 Explorer broadcasts `TaskbarCreated`. These paths require native Windows testing.
 
 The notification icon uses the documented
@@ -140,7 +155,8 @@ Manual checks still required:
 3. Use only the keyboard to open Start, launch an application and select a window.
 4. Test 100%, 150% and 200% display scaling, a fullscreen application, and changes
    to primary-monitor resolution. Confirm maximized windows avoid the appbar.
-5. Restart Explorer and verify panel reservation and notification-icon recovery.
+5. Restart Explorer while the companion runs; verify the Windows taskbar disappears
+   again, including on secondary monitors, and the companion reserves its space.
 6. Exit normally and verify maximized windows regain the reserved space.
 7. Minimize all applications and verify the blue background is visible. Click and
    right-click it and confirm no activation, menu or selection occurs. Open a

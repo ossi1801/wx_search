@@ -105,37 +105,117 @@ void populateMenuIcons(HMENU popup) {
     }
 }
 
-bool stopExplorer() {
+// Match the supplied cleanup script, scoped to this desktop session. Never
+// target our own PID, even if the distributed executable is renamed Explorer.
+const wchar_t* cleanupImages[] = {
+    L"explorer.exe", L"SearchHost.exe", L"calc.exe", L"Photos.exe",
+    L"HxOutlook.exe", L"Music.UI.exe", L"Video.UI.exe", L"SoundRecorder.exe",
+    L"bingweather.exe", L"bingnews.exe", L"WinStore.App.exe", L"GameBar.exe",
+    L"FeedbackHub.exe", L"Maps.exe", L"Microsoft.WindowsCamera.exe",
+    L"Microsoft.WindowsAlarms.exe", L"Microsoft.Notes.exe", L"SnippingTool.exe",
+    L"Microsoft.Windows.Photos.exe", L"mspaint.exe", L"StartMenuExperienceHost.exe",
+    L"Widgets.exe", L"WidgetService.exe", L"PhoneExperienceHost.exe",
+    L"GameBarFT.exe", L"ms-teams.exe", L"msedgewebview2.exe", L"Skype.exe",
+    L"SkypeApp.exe", L"SkypeBackgroundHost.exe", L"MicrosoftEdgeUpdate.exe",
+    L"MicrosoftEdgeSH.exe"
+};
+
+BOOL CALLBACK cleanupInputWindow(HWND window, LPARAM data) {
+    wchar_t title[256]{};
+    GetWindowTextW(window, title, 256);
+    if (wcsncmp(title, L"Copilot", 7) == 0 ||
+        wcsncmp(title, L"Clipboard History", 17) == 0 ||
+        wcsncmp(title, L"Emoji Panel", 11) == 0) {
+        DWORD pid{}; GetWindowThreadProcessId(window, &pid);
+        reinterpret_cast<std::set<DWORD>*>(data)->insert(pid);
+    }
+    return TRUE;
+}
+
+bool forceStop(DWORD pid) {
+    HANDLE process = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, pid);
+    if (process) {
+        const bool stopped = WaitForSingleObject(process, 0) == WAIT_OBJECT_0 ||
+            (TerminateProcess(process, 0) && WaitForSingleObject(process, 2000) == WAIT_OBJECT_0);
+        CloseHandle(process);
+        if (stopped) return true;
+    } else if (GetLastError() == ERROR_INVALID_PARAMETER) return true;
+
+    // Use the same forceful taskkill path as the batch file if direct process
+    // termination fails. An absolute system path avoids PATH substitutions.
+    wchar_t system[MAX_PATH]{};
+    if (!GetSystemDirectoryW(system, MAX_PATH)) return false;
+    const auto executable = fs::path(system) / L"taskkill.exe";
+    std::wstring command = L"\"" + executable.wstring() + L"\" /F /PID " + std::to_wstring(pid);
+    STARTUPINFOW startup{}; startup.cb = sizeof(startup);
+    PROCESS_INFORMATION child{};
+    if (!CreateProcessW(executable.c_str(), command.data(), nullptr, nullptr, FALSE,
+                        CREATE_NO_WINDOW, nullptr, nullptr, &startup, &child)) return false;
+    const DWORD wait = WaitForSingleObject(child.hProcess, 5000);
+    DWORD code = 1;
+    if (wait == WAIT_OBJECT_0) GetExitCodeProcess(child.hProcess, &code);
+    else { TerminateProcess(child.hProcess, 1); WaitForSingleObject(child.hProcess, 1000); }
+    CloseHandle(child.hThread); CloseHandle(child.hProcess);
+    return wait == WAIT_OBJECT_0 && code == 0;
+}
+
+bool stopProcesses(bool explorerOnly, bool* explorerFound = nullptr) {
     DWORD session{};
     if (!ProcessIdToSessionId(GetCurrentProcessId(), &session)) return false;
+    std::set<DWORD> inputWindows;
+    if (!explorerOnly) EnumWindows(cleanupInputWindow, reinterpret_cast<LPARAM>(&inputWindows));
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snapshot == INVALID_HANDLE_VALUE) return false;
     PROCESSENTRY32W entry{}; entry.dwSize = sizeof(entry);
     bool ok = true;
     BOOL found = Process32FirstW(snapshot, &entry);
     if (!found && GetLastError() != ERROR_NO_MORE_FILES) ok = false;
-    for (; found; found = Process32NextW(snapshot, &entry)) {
-        if (_wcsicmp(entry.szExeFile, L"explorer.exe") != 0) continue;
-        DWORD processSession{};
-        if (!ProcessIdToSessionId(entry.th32ProcessID, &processSession)) {
-            if (GetLastError() != ERROR_INVALID_PARAMETER) ok = false;
-            continue;
+    while (found) {
+        const bool explorer = _wcsicmp(entry.szExeFile, L"explorer.exe") == 0;
+        const bool selected = explorer || (!explorerOnly &&
+            (std::any_of(std::begin(cleanupImages), std::end(cleanupImages),
+                [&](const wchar_t* name) { return _wcsicmp(entry.szExeFile, name) == 0; }) ||
+             (_wcsicmp(entry.szExeFile, L"TextInputHost.exe") == 0 && inputWindows.count(entry.th32ProcessID))));
+        if (selected && entry.th32ProcessID != GetCurrentProcessId()) {
+            DWORD processSession{};
+            if (ProcessIdToSessionId(entry.th32ProcessID, &processSession)) {
+                if (processSession == session) {
+                    if (explorer && explorerFound) *explorerFound = true;
+                    if (!forceStop(entry.th32ProcessID) && explorer) ok = false;
+                }
+            } else if (explorer && GetLastError() != ERROR_INVALID_PARAMETER) ok = false;
         }
-        if (processSession != session) continue;
-        HANDLE process = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, entry.th32ProcessID);
-        if (!process) {
-            if (GetLastError() != ERROR_INVALID_PARAMETER) ok = false;
-            continue;
-        }
-        if (WaitForSingleObject(process, 0) != WAIT_OBJECT_0) {
-            if (!TerminateProcess(process, 0) && WaitForSingleObject(process, 0) != WAIT_OBJECT_0) ok = false;
-            if (WaitForSingleObject(process, 5000) != WAIT_OBJECT_0) ok = false;
-        }
-        CloseHandle(process);
+        found = Process32NextW(snapshot, &entry);
+        if (!found && GetLastError() != ERROR_NO_MORE_FILES) ok = false;
     }
-    if (GetLastError() != ERROR_NO_MORE_FILES) ok = false;
     CloseHandle(snapshot);
     return ok;
+}
+
+BOOL CALLBACK findNativeTaskbar(HWND window, LPARAM data) {
+    wchar_t name[128]{}; GetClassNameW(window, name, 128);
+    if (wcscmp(name, L"Shell_TrayWnd") == 0 || wcscmp(name, L"Shell_SecondaryTrayWnd") == 0) {
+        // Hide the old bar immediately, including secondary-monitor bars,
+        // while its owner finishes terminating.
+        ShowWindow(window, SW_HIDE);
+        *reinterpret_cast<bool*>(data) = true;
+    }
+    return TRUE;
+}
+
+bool stopExplorer(bool cleanup = false) {
+    for (int attempt = 0; attempt < 5; ++attempt) {
+        bool nativeBar = false;
+        EnumWindows(findNativeTaskbar, reinterpret_cast<LPARAM>(&nativeBar));
+        if (!stopProcesses(!cleanup || attempt != 0)) return false;
+        Sleep(200);
+        nativeBar = false;
+        EnumWindows(findNativeTaskbar, reinterpret_cast<LPARAM>(&nativeBar));
+        bool restarted = false;
+        if (!stopProcesses(true, &restarted)) return false;
+        if (!nativeBar && !restarted) return true;
+    }
+    return false;
 }
 
 fs::path knownFolder(REFKNOWNFOLDERID id) {
@@ -471,7 +551,11 @@ void windowMenu() {
 }
 
 LRESULT CALLBACK barProc(HWND window, UINT message, WPARAM w, LPARAM l) {
-    if (taskbarCreated && message == taskbarCreated) { registered = false; registerBar(); tray(); return 0; }
+    if (taskbarCreated && message == taskbarCreated) {
+        // Defer shutdown until outside Explorer's broadcast call.
+        SetTimer(window, 2, 200, nullptr);
+        return 0;
+    }
     if (message == AppbarMessage) {
         if (w == ABN_POSCHANGED) positionBar();
         if (w == ABN_FULLSCREENAPP) {
@@ -489,7 +573,19 @@ LRESULT CALLBACK barProc(HWND window, UINT message, WPARAM w, LPARAM l) {
         EndPaint(window, &ps); return 0;
     }
     case WM_MOUSEACTIVATE: priorForeground = GetForegroundWindow(); return MA_NOACTIVATE;
-    case WM_TIMER: refreshTasks(); explorer::background::refresh(); return 0;
+    case WM_TIMER:
+        if (w == 2) {
+            KillTimer(window, 2);
+            if (!stopExplorer()) {
+                MessageBoxW(window, L"Windows Explorer restarted and could not be stopped. Close the companion and retry.",
+                    L"Explorer", MB_OK | MB_ICONERROR);
+                DestroyWindow(window);
+                return 0;
+            }
+            registered = false;
+            registerBar();
+        }
+        refreshTasks(); explorer::background::refresh(); return 0;
     case WM_DISPLAYCHANGE: positionBar(); return 0;
     case WM_SETTINGCHANGE: explorer::background::refresh(); return 0;
     case WM_ACTIVATE: {
@@ -518,7 +614,7 @@ LRESULT CALLBACK barProc(HWND window, UINT message, WPARAM w, LPARAM l) {
         return 0;
     case WM_CLOSE: DestroyWindow(window); return 0;
     case WM_DESTROY: {
-        KillTimer(window, 1); UnregisterHotKey(window, 1); tray(true);
+        KillTimer(window, 1); KillTimer(window, 2); UnregisterHotKey(window, 1); tray(true);
         if (registered) { APPBARDATA data{}; data.cbSize = sizeof(data); data.hWnd = window; SHAppBarMessage(ABM_REMOVE, &data); registered = false; }
         if (manualWorkArea) {
             SystemParametersInfoW(SPI_SETWORKAREA, 0, &savedWorkArea, SPIF_SENDCHANGE);
@@ -540,7 +636,7 @@ int runWindowsShell(HINSTANCE instance, bool smokeTest) {
     InitCommonControlsEx(&controls);
     HANDLE mutex = CreateMutexW(nullptr, FALSE, L"Local\\RexplorerTaskbarCompanion");
     if (!mutex || GetLastError() == ERROR_ALREADY_EXISTS) { if (mutex) CloseHandle(mutex); return smokeTest ? 1 : 0; }
-    if (!stopExplorer()) {
+    if (!stopExplorer(true)) {
         MessageBoxW(nullptr, L"Explorer could not be stopped. The taskbar will not start while Explorer is still running.",
             L"Explorer", MB_OK | MB_ICONERROR);
         CloseHandle(mutex);
