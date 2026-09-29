@@ -2,12 +2,71 @@
 #define _UNICODE
 #define NOMINMAX
 #include "background.h"
-#include <algorithm>
+#include "background_images.h"
+#include <shlobj.h>
+#include <wincodec.h>
+#include <wrl/client.h>
+#include <vector>
+#include <new>
 
 namespace explorer::background {
 namespace {
 HWND surface{};
 bool enabled = true;
+ImageFile currentImage;
+std::vector<BYTE> pixels;
+BITMAPINFO imageInfo{};
+ULONGLONG lastImageCheck{};
+bool checkedImage = false;
+
+bool loadImage(const fs::path& path) {
+    using Microsoft::WRL::ComPtr;
+    ComPtr<IWICImagingFactory> factory;
+    ComPtr<IWICBitmapDecoder> decoder;
+    ComPtr<IWICBitmapFrameDecode> frame;
+    ComPtr<IWICFormatConverter> converter;
+    UINT width{}, height{};
+    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+        IID_PPV_ARGS(factory.GetAddressOf()))) ||
+        FAILED(factory->CreateDecoderFromFilename(path.c_str(), nullptr, GENERIC_READ,
+            WICDecodeMetadataCacheOnLoad, decoder.GetAddressOf())) ||
+        FAILED(decoder->GetFrame(0, frame.GetAddressOf())) ||
+        FAILED(frame->GetSize(&width, &height))) return false;
+    // Bound decoding memory and reject dimensions that overflow the DIB or WIC stride.
+    constexpr UINT maxBytes = 256 * 1024 * 1024;
+    if (!width || !height || width > maxBytes / 4 || height > maxBytes / (width * 4)) return false;
+    if (FAILED(factory->CreateFormatConverter(converter.GetAddressOf())) ||
+        FAILED(converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppBGR,
+            WICBitmapDitherTypeNone, nullptr, 0, WICBitmapPaletteTypeCustom))) return false;
+    std::vector<BYTE> decoded;
+    try { decoded.resize(static_cast<size_t>(width) * height * 4); }
+    catch (const std::bad_alloc&) { return false; }
+    if (FAILED(converter->CopyPixels(nullptr, width * 4, static_cast<UINT>(decoded.size()), decoded.data())))
+        return false;
+    imageInfo = {};
+    imageInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    imageInfo.bmiHeader.biWidth = static_cast<LONG>(width);
+    imageInfo.bmiHeader.biHeight = -static_cast<LONG>(height);
+    imageInfo.bmiHeader.biPlanes = 1;
+    imageInfo.bmiHeader.biBitCount = 32;
+    imageInfo.bmiHeader.biCompression = BI_RGB;
+    pixels = std::move(decoded);
+    return true;
+}
+
+void refreshImage() {
+    const ULONGLONG now = GetTickCount64();
+    if (checkedImage && now - lastImageCheck < 1000) return;
+    lastImageCheck = now;
+    const auto selected = selectImage(folder());
+    if (checkedImage && selected == currentImage) return;
+    checkedImage = true;
+    currentImage = selected;
+    pixels.clear();
+    imageInfo = {};
+    if (!selected.path.empty()) loadImage(selected.path);
+    InvalidateRect(surface, nullptr, FALSE);
+}
 
 // Keep normal application windows above the surface. Explorer's desktop hosts
 // are deliberately excluded so this companion can cover the existing desktop.
@@ -35,8 +94,16 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM w, LPARAM l) {
     case WM_PAINT: {
         PAINTSTRUCT paint{}; HDC dc = BeginPaint(window, &paint);
         RECT client{}; GetClientRect(window, &client);
+        if (!pixels.empty()) {
+            SetStretchBltMode(dc, HALFTONE);
+            SetBrushOrgEx(dc, 0, 0, nullptr);
+            const int drawn = StretchDIBits(dc, 0, 0, client.right, client.bottom, 0, 0,
+                imageInfo.bmiHeader.biWidth, -imageInfo.bmiHeader.biHeight,
+                pixels.data(), &imageInfo, DIB_RGB_COLORS, SRCCOPY);
+            if (drawn != 0 && static_cast<DWORD>(drawn) != GDI_ERROR) { EndPaint(window, &paint); return 0; }
+        }
         const int height = std::max(1L, client.bottom);
-        // GDI-only blue wallpaper: no assets, controls, network or animations.
+        // Blue placeholder when no supported image can be decoded.
         for (int y = paint.rcPaint.top; y < paint.rcPaint.bottom; y += 2) {
             const int red = 24 + 18 * y / height;
             const int green = 54 + 43 * y / height;
@@ -50,6 +117,22 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM w, LPARAM l) {
     }
     return DefWindowProcW(window, message, w, l);
 }
+}
+
+fs::path folder() {
+    static const fs::path root = [] {
+        PWSTR local = nullptr;
+        fs::path result;
+        if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &local)))
+            result = fs::path(local) / L"Rexplorer" / L"Backgrounds";
+        CoTaskMemFree(local);
+        return result;
+    }();
+    if (!root.empty()) {
+        std::error_code ec;
+        fs::create_directories(root, ec);
+    }
+    return root;
 }
 
 bool create(HINSTANCE instance) {
@@ -66,6 +149,7 @@ bool create(HINSTANCE instance) {
 
 void refresh() {
     if (!surface || !enabled) return;
+    refreshImage();
     MONITORINFO monitor{}; monitor.cbSize = sizeof(monitor);
     if (!GetMonitorInfoW(MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY), &monitor)) return;
     HWND after = HWND_TOP;
@@ -74,6 +158,7 @@ void refresh() {
     UINT flags = SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW;
     if (EqualRect(&current, &monitor.rcWork)) flags |= SWP_NOMOVE | SWP_NOSIZE;
     if (GetWindow(surface, GW_HWNDPREV) == after) flags |= SWP_NOZORDER;
+    if (!EqualRect(&current, &monitor.rcWork)) InvalidateRect(surface, nullptr, FALSE);
     SetWindowPos(surface, after, monitor.rcWork.left, monitor.rcWork.top,
         monitor.rcWork.right - monitor.rcWork.left, monitor.rcWork.bottom - monitor.rcWork.top, flags);
 }
@@ -89,6 +174,11 @@ void destroy() {
     if (surface) DestroyWindow(surface);
     surface = nullptr;
     enabled = true;
+    pixels.clear();
+    imageInfo = {};
+    currentImage = {};
+    checkedImage = false;
+    lastImageCheck = 0;
 }
 bool visible() { return surface && enabled && IsWindowVisible(surface); }
 HWND handle() { return surface; }

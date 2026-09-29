@@ -121,10 +121,15 @@ After successful builds, generate verified ZIPs using the version in CMake:
 ```sh
 ./b.sh -DCMAKE_BUILD_TYPE=Release
 ./bw.sh
-python3 package_release.py
+./release.sh
 ```
 
 The packager requires the integrated Windows build and produces Linux and Windows
 archives under `release/`, with documentation and refreshed `SHA256SUMS`. Existing
-versioned releases are retained. The Windows archive contains only one executable,
+versioned releases are retained; packaging the same version replaces its ZIPs.
+`release.sh` packages existing builds without rebuilding. Use `./release.sh --help`
+for custom Linux/Windows build folders or an output folder; `BUILD_DIR` also
+selects the Linux build folder. You can still run `python3 package_release.py`
+directly. Linux requires the wxWidgets/GTK runtime libraries on the target system.
+The Windows archive contains only one executable,
 `search.exe`. Native Windows runtime testing is still required.

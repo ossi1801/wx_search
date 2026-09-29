@@ -3,6 +3,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include <shellapi.h>
+#include <tlhelp32.h>
 #include <shlobj.h>
 #include <dwmapi.h>
 #include <commctrl.h>
@@ -11,13 +12,15 @@
 #include <string>
 #include <vector>
 #include <cwctype>
+#include <map>
+#include <set>
 #include "taskbar_model.h"
 #include "background.h"
 
 namespace fs = std::filesystem;
 namespace {
 constexpr UINT AppbarMessage = WM_APP + 1, TrayMessage = WM_APP + 2;
-constexpr int Start = 100, Files = 101, Desktop = 102, More = 103, Exit = 104, Clock = 107, Background = 108;
+constexpr int Start = 100, Files = 101, Desktop = 102, More = 103, Exit = 104, Clock = 107, Background = 108, BackgroundFolder = 109;
 constexpr int AppFirst = 1000, WindowFirst = 10000;
 struct Item { std::wstring label; fs::path path; };
 struct Task { HWND window; std::wstring title; };
@@ -33,6 +36,107 @@ HFONT font{};
 int height = 42, buttonWidth = 170, visibleTasks = 0;
 unsigned dpi = 96;
 HWND priorForeground{};
+bool manualWorkArea = false;
+RECT savedWorkArea{};
+struct MenuIcon { HBITMAP bitmap{}; fs::file_time_type modified{}; };
+std::map<fs::path, MenuIcon> menuIcons;
+
+void clearMenuIcons() {
+    for (const auto& entry : menuIcons) if (entry.second.bitmap) DeleteObject(entry.second.bitmap);
+    menuIcons.clear();
+}
+
+HBITMAP applicationIcon(const fs::path& path) {
+    std::error_code ec;
+    const auto modified = fs::last_write_time(path, ec);
+    auto& cached = menuIcons[path];
+    if (cached.bitmap && cached.modified == modified) return cached.bitmap;
+    if (cached.bitmap) DeleteObject(cached.bitmap);
+    cached = {nullptr, modified};
+    SHFILEINFOW info{};
+    SHGetFileInfoW(path.c_str(), 0, &info, sizeof(info), SHGFI_ICON | SHGFI_LARGEICON);
+    HICON icon = info.hIcon;
+    if (!icon) icon = CopyIcon(LoadIconW(nullptr, IDI_APPLICATION));
+    if (!icon) return nullptr;
+    const int size = MulDiv(16, dpi, 96);
+    BITMAPINFO dib{}; dib.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    dib.bmiHeader.biWidth = size; dib.bmiHeader.biHeight = -size;
+    dib.bmiHeader.biPlanes = 1; dib.bmiHeader.biBitCount = 32; dib.bmiHeader.biCompression = BI_RGB;
+    DWORD* pixels = nullptr;
+    HDC dc = CreateCompatibleDC(nullptr);
+    HBITMAP bitmap = CreateDIBSection(dc, &dib, DIB_RGB_COLORS, reinterpret_cast<void**>(&pixels), nullptr, 0);
+    if (dc && bitmap) {
+        const auto old = SelectObject(dc, bitmap);
+        std::fill(pixels, pixels + size * size, 0);
+        DrawIconEx(dc, 0, 0, icon, size, size, 0, nullptr, DI_NORMAL);
+        GdiFlush();
+        // Legacy icons have an AND mask instead of alpha. Convert that mask
+        // so native menus can composite both old and modern application icons.
+        const bool hasAlpha = std::any_of(pixels, pixels + size * size, [](DWORD pixel) { return (pixel >> 24) != 0; });
+        if (!hasAlpha) {
+            DWORD* maskPixels = nullptr;
+            HBITMAP mask = CreateDIBSection(dc, &dib, DIB_RGB_COLORS, reinterpret_cast<void**>(&maskPixels), nullptr, 0);
+            if (mask) {
+                SelectObject(dc, mask);
+                std::fill(maskPixels, maskPixels + size * size, 0x00ffffff);
+                DrawIconEx(dc, 0, 0, icon, size, size, 0, nullptr, DI_MASK);
+                GdiFlush();
+                for (int i = 0; i < size * size; ++i)
+                    pixels[i] = (maskPixels[i] & 0x00ffffff) ? 0 : (pixels[i] | 0xff000000);
+                SelectObject(dc, bitmap);
+                DeleteObject(mask);
+            }
+        }
+        SelectObject(dc, old);
+        cached.bitmap = bitmap;
+    } else if (bitmap) DeleteObject(bitmap);
+    if (dc) DeleteDC(dc);
+    DestroyIcon(icon);
+    return cached.bitmap;
+}
+
+void populateMenuIcons(HMENU popup) {
+    for (int i = 0; i < GetMenuItemCount(popup); ++i) {
+        const UINT id = GetMenuItemID(popup, i);
+        if (id < AppFirst || id >= AppFirst + apps.size()) continue;
+        MENUITEMINFOW item{}; item.cbSize = sizeof(item); item.fMask = MIIM_BITMAP;
+        item.hbmpItem = applicationIcon(apps[id - AppFirst].path);
+        SetMenuItemInfoW(popup, i, TRUE, &item);
+    }
+}
+
+bool stopExplorer() {
+    DWORD session{};
+    if (!ProcessIdToSessionId(GetCurrentProcessId(), &session)) return false;
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) return false;
+    PROCESSENTRY32W entry{}; entry.dwSize = sizeof(entry);
+    bool ok = true;
+    BOOL found = Process32FirstW(snapshot, &entry);
+    if (!found && GetLastError() != ERROR_NO_MORE_FILES) ok = false;
+    for (; found; found = Process32NextW(snapshot, &entry)) {
+        if (_wcsicmp(entry.szExeFile, L"explorer.exe") != 0) continue;
+        DWORD processSession{};
+        if (!ProcessIdToSessionId(entry.th32ProcessID, &processSession)) {
+            if (GetLastError() != ERROR_INVALID_PARAMETER) ok = false;
+            continue;
+        }
+        if (processSession != session) continue;
+        HANDLE process = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, entry.th32ProcessID);
+        if (!process) {
+            if (GetLastError() != ERROR_INVALID_PARAMETER) ok = false;
+            continue;
+        }
+        if (WaitForSingleObject(process, 0) != WAIT_OBJECT_0) {
+            if (!TerminateProcess(process, 0) && WaitForSingleObject(process, 0) != WAIT_OBJECT_0) ok = false;
+            if (WaitForSingleObject(process, 5000) != WAIT_OBJECT_0) ok = false;
+        }
+        CloseHandle(process);
+    }
+    if (GetLastError() != ERROR_NO_MORE_FILES) ok = false;
+    CloseHandle(snapshot);
+    return ok;
+}
 
 fs::path knownFolder(REFKNOWNFOLDERID id) {
     PWSTR value = nullptr;
@@ -47,11 +151,12 @@ void launch(const fs::path& path, const wchar_t* args = nullptr) {
         MessageBoxW(bar, L"Windows could not open this item.", L"Explorer companion", MB_OK | MB_ICONERROR);
 }
 
-void openBrowser() {
+void openBrowser(const fs::path& folder = {}) {
     wchar_t module[32768]{};
     GetModuleFileNameW(nullptr, module, 32768);
     // One distributed executable, independent processes for browser windows.
-    launch(fs::path(module), L"--browser");
+    const auto args = folder.empty() ? std::wstring(L"--browser") : L"--browser \"" + folder.wstring() + L"\"";
+    launch(fs::path(module), args.c_str());
 }
 
 bool smokeBrowserProcess() {
@@ -122,15 +227,22 @@ void activate(HWND window) {
 }
 
 void positionBar() {
-    if (!registered || positioning) return;
+    if ((!registered && !manualWorkArea) || positioning) return;
     positioning = true;
     MONITORINFO monitor{}; monitor.cbSize = sizeof(monitor);
     GetMonitorInfoW(MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY), &monitor);
     APPBARDATA data{}; data.cbSize = sizeof(data); data.hWnd = bar; data.uEdge = ABE_BOTTOM; data.rc = monitor.rcMonitor;
     data.rc.top = data.rc.bottom - height;
-    SHAppBarMessage(ABM_QUERYPOS, &data);
-    data.rc.top = data.rc.bottom - height;
-    SHAppBarMessage(ABM_SETPOS, &data);
+    if (registered) {
+        SHAppBarMessage(ABM_QUERYPOS, &data);
+        data.rc.top = data.rc.bottom - height;
+        SHAppBarMessage(ABM_SETPOS, &data);
+    } else {
+        savedWorkArea = monitor.rcMonitor;
+        RECT work = savedWorkArea;
+        work.bottom = data.rc.top;
+        SystemParametersInfoW(SPI_SETWORKAREA, 0, &work, SPIF_SENDCHANGE);
+    }
     SetWindowPos(bar, fullscreen ? HWND_BOTTOM : HWND_TOPMOST, data.rc.left, data.rc.top,
                  data.rc.right - data.rc.left, data.rc.bottom - data.rc.top, SWP_NOACTIVATE);
     positioning = false;
@@ -139,9 +251,14 @@ void positionBar() {
 
 bool registerBar() {
     APPBARDATA data{}; data.cbSize = sizeof(data); data.hWnd = bar; data.uCallbackMessage = AppbarMessage;
+    // Explorer normally hosts appbar registration. Reserve the work area
+    // ourselves when that service is absent after stopping Explorer.
     registered = SHAppBarMessage(ABM_NEW, &data) != 0;
+    manualWorkArea = !registered;
     positionBar();
-    return registered;
+    MONITORINFO monitor{}; monitor.cbSize = sizeof(monitor);
+    return registered || (GetMonitorInfoW(MonitorFromWindow(bar, MONITOR_DEFAULTTOPRIMARY), &monitor) &&
+        monitor.rcWork.bottom == monitor.rcMonitor.bottom - height);
 }
 
 void tray(bool remove = false) {
@@ -186,10 +303,19 @@ void menu(bool launcher) {
     AppendMenuW(popup, MF_STRING, Desktop, L"Desktop items");
     AppendMenuW(popup, MF_STRING | (explorer::background::visible() ? MF_CHECKED : MF_UNCHECKED),
         Background, L"Desktop background");
+    AppendMenuW(popup, MF_STRING, BackgroundFolder, L"Open background folder");
     if (launcher) {
         apps.clear();
         readItems(knownFolder(FOLDERID_Programs), true, apps);
         readItems(knownFolder(FOLDERID_CommonPrograms), true, apps);
+        std::set<fs::path> paths;
+        for (const auto& app : apps) paths.insert(app.path);
+        for (auto it = menuIcons.begin(); it != menuIcons.end();) {
+            if (!paths.count(it->first)) {
+                if (it->second.bitmap) DeleteObject(it->second.bitmap);
+                it = menuIcons.erase(it);
+            } else ++it;
+        }
         HMENU programs = CreatePopupMenu();
         // Paginate the catalog so large installations remain navigable.
         for (size_t offset = 0; offset < apps.size(); offset += 30) {
@@ -218,6 +344,12 @@ void menu(bool launcher) {
     else if (command == Files) openBrowser();
     else if (command == Desktop) showDesktop();
     else if (command == Background) explorer::background::toggle();
+    else if (command == BackgroundFolder) {
+        const auto folder = explorer::background::folder();
+        std::error_code ec;
+        if (!folder.empty() && fs::is_directory(folder, ec)) openBrowser(folder);
+        else MessageBoxW(bar, L"The background folder could not be created.", L"Explorer companion", MB_OK | MB_ICONERROR);
+    }
     else if (command == Exit) DestroyWindow(bar);
     else if (command == 105) launch(L"ms-settings:");
     else if (command == 106) {
@@ -349,6 +481,7 @@ LRESULT CALLBACK barProc(HWND window, UINT message, WPARAM w, LPARAM l) {
         return 0;
     }
     switch (message) {
+    case WM_INITMENUPOPUP: populateMenuIcons(reinterpret_cast<HMENU>(w)); return 0;
     case WM_SIZE: layoutButtons(); return 0;
     case WM_PAINT: {
         PAINTSTRUCT ps{}; HDC dc = BeginPaint(window, &ps);
@@ -387,6 +520,11 @@ LRESULT CALLBACK barProc(HWND window, UINT message, WPARAM w, LPARAM l) {
     case WM_DESTROY: {
         KillTimer(window, 1); UnregisterHotKey(window, 1); tray(true);
         if (registered) { APPBARDATA data{}; data.cbSize = sizeof(data); data.hWnd = window; SHAppBarMessage(ABM_REMOVE, &data); registered = false; }
+        if (manualWorkArea) {
+            SystemParametersInfoW(SPI_SETWORKAREA, 0, &savedWorkArea, SPIF_SENDCHANGE);
+            manualWorkArea = false;
+        }
+        clearMenuIcons();
         explorer::background::destroy();
         if (desktop) DestroyWindow(desktop);
         PostQuitMessage(0); return 0;
@@ -398,13 +536,26 @@ LRESULT CALLBACK barProc(HWND window, UINT message, WPARAM w, LPARAM l) {
 
 int runWindowsShell(HINSTANCE instance, bool smokeTest) {
     SetProcessDPIAware();
-    MONITORINFO originalMonitor{}; originalMonitor.cbSize = sizeof(originalMonitor);
-    GetMonitorInfoW(MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY), &originalMonitor);
-    // A companion, never an automatic replacement of the user's configured shell.
     INITCOMMONCONTROLSEX controls{}; controls.dwSize = sizeof(controls); controls.dwICC = ICC_LISTVIEW_CLASSES;
     InitCommonControlsEx(&controls);
     HANDLE mutex = CreateMutexW(nullptr, FALSE, L"Local\\RexplorerTaskbarCompanion");
     if (!mutex || GetLastError() == ERROR_ALREADY_EXISTS) { if (mutex) CloseHandle(mutex); return smokeTest ? 1 : 0; }
+    if (!stopExplorer()) {
+        MessageBoxW(nullptr, L"Explorer could not be stopped. The taskbar will not start while Explorer is still running.",
+            L"Explorer", MB_OK | MB_ICONERROR);
+        CloseHandle(mutex);
+        return 1;
+    }
+    MONITORINFO originalMonitor{}; originalMonitor.cbSize = sizeof(originalMonitor);
+    GetMonitorInfoW(MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY), &originalMonitor);
+    // Remove Explorer's old reservation before calculating our taskbar bounds.
+    savedWorkArea = originalMonitor.rcMonitor;
+    if (!SystemParametersInfoW(SPI_SETWORKAREA, 0, &savedWorkArea, SPIF_SENDCHANGE)) {
+        MessageBoxW(nullptr, L"The desktop work area could not be reset.", L"Explorer", MB_OK | MB_ICONERROR);
+        CloseHandle(mutex);
+        return 1;
+    }
+    originalMonitor.rcWork = savedWorkArea;
     const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     HDC screen = GetDC(nullptr);
     dpi = static_cast<unsigned>(GetDeviceCaps(screen, LOGPIXELSY)); ReleaseDC(nullptr, screen);
@@ -449,11 +600,25 @@ int runWindowsShell(HINSTANCE instance, bool smokeTest) {
         passed = passed && !IsWindowVisible(background);
         explorer::background::toggle();
         passed = passed && explorer::background::visible();
-        passed = passed && registered && startButton && filesButton && moreButton && clockButton &&
+        passed = passed && (registered || manualWorkArea) && rect.bottom == originalMonitor.rcMonitor.bottom && startButton && filesButton && moreButton && clockButton &&
             IsWindowVisible(bar) && !isTask(bar) && rect.bottom > rect.top;
         MONITORINFO during{}; during.cbSize = sizeof(during);
         GetMonitorInfoW(MonitorFromWindow(bar, MONITOR_DEFAULTTOPRIMARY), &during);
         passed = passed && during.rcWork.bottom <= rect.top && EqualRect(&backgroundRect, &during.rcWork);
+        wchar_t module[32768]{};
+        GetModuleFileNameW(nullptr, module, 32768);
+        apps = {{L"Icon smoke test", fs::path(module)}};
+        HMENU iconMenu = CreatePopupMenu();
+        AppendMenuW(iconMenu, MF_STRING, AppFirst, L"Icon smoke test");
+        populateMenuIcons(iconMenu);
+        MENUITEMINFOW iconItem{}; iconItem.cbSize = sizeof(iconItem); iconItem.fMask = MIIM_BITMAP;
+        BITMAP bitmap{};
+        passed = GetMenuItemInfoW(iconMenu, 0, TRUE, &iconItem) && iconItem.hbmpItem &&
+            GetObjectW(iconItem.hbmpItem, sizeof(bitmap), &bitmap) &&
+            bitmap.bmWidth == MulDiv(16, dpi, 96) && bitmap.bmHeight == MulDiv(16, dpi, 96) &&
+            applicationIcon(fs::path(module)) == iconItem.hbmpItem && passed;
+        DestroyMenu(iconMenu);
+        apps.clear();
         passed = smokeBrowserProcess() && passed;
         showDesktop();
         passed = passed && desktop && desktopList && IsWindowVisible(desktop) && !isTask(desktop);

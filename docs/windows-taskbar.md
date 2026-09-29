@@ -1,8 +1,17 @@
 # Windows taskbar companion
 
 The optional `search.exe` starts a taskbar companion on the primary
-monitor, plus a non-interactive blue desktop background. It registers a Windows appbar and coexists with Explorer. It does not
-change the configured shell, install autostart entries, or terminate Explorer.
+monitor, plus a non-interactive desktop background. Before creating the taskbar,
+it terminates `explorer.exe` processes in the current
+Windows session and waits for them to exit. This also closes Windows File Explorer
+windows. Startup stops with an error if Explorer cannot be terminated. Browser-only
+launches do not stop Explorer, and a second taskbar instance exits before this step.
+It does not change the configured shell or install autostart entries.
+
+The taskbar clears Explorer's old screen reservation and aligns with the bottom
+of the primary monitor. When Explorer's appbar service is unavailable, it reserves
+the work area directly and releases that space on exit. Explorer is not restarted
+automatically; run `explorer.exe` from Task Manager's Run new task to restore it.
 
 ## Build and launch
 
@@ -39,7 +48,6 @@ startup behavior and do not compile the Windows shell sources.
 +-----------------------------------------------------------------------+
 | Start | Files | App window | App window | ... | All | Local time       |
 +-----------------------------------------------------------------------+
-             Windows' existing taskbar and notification area
 ```
 
 - Window buttons follow visible, titled application windows, including minimized
@@ -52,10 +60,25 @@ startup behavior and do not compile the Windows shell sources.
 - **All** lists every tracked window when the taskbar is crowded.
 - **Files** launches this project's file browser.
 - **Start > Programs** lists user and public Start-menu shortcuts, grouped into
-  pages. The catalog refreshes on opening Start and is capped at 2,000 items.
-- **Desktop background** in Start or the companion's context menu toggles a
-  non-interactive blue gradient covering the primary monitor's work area. It
-  starts enabled, has no icons or controls, and ignores clicks without taking
+  pages. Each entry shows its shortcut's application icon, with a generic icon
+  when extraction fails. Icons scale with the system DPI, load when their submenu
+  opens, and remain cached until the shortcut changes or disappears. The catalog
+  refreshes on opening Start and is capped at 2,000 items.
+- **Open background folder** opens `%LOCALAPPDATA%\Rexplorer\Backgrounds`
+  in this application's file browser. The folder is created automatically. Put a
+  PNG, JPG/JPEG or BMP image directly in it; subfolders are ignored. With multiple
+  images, the first filename in ordinal alphabetical order is selected (extension
+  matching is case-insensitive). Use a single image to make the choice explicit.
+- **Desktop background** in Start or the companion's context menu toggles the
+  background covering the primary monitor's work area, excluding the taskbar.
+  The selected image is stretched to fill that area, including aspect-ratio
+  distortion, and resizes after resolution/work-area changes. Missing, unreadable
+  or invalid images show the original blue gradient. Decoded images are limited
+  to 256 MiB; larger images also use the blue placeholder.
+  The visible background checks the folder once per second and reloads when the
+  selected filename, file size or modification time changes. Adding, replacing or
+  removing an image requires no restart. A hidden background updates when shown.
+  It starts enabled, has no icons or controls, and ignores clicks without taking
   keyboard focus. Hiding it exposes the original desktop; exiting destroys it.
   The existing Windows wallpaper setting is not changed.
 - **Start > Desktop items** opens a windowed icon view of the user and public
@@ -64,14 +87,14 @@ startup behavior and do not compile the Windows shell sources.
 - The clock opens Windows date/time settings.
 - Ctrl+Alt+Space focuses the companion, then Tab/Shift+Tab and Space operate its
   native buttons. The shortcut is unavailable if another application owns it.
-- The companion adds its own icon to Explorer's notification area. Double-click
-  opens the browser; right-click offers desktop items and Exit companion.
+- If Explorer is manually restarted, the companion adds its own icon to its
+  notification area. Double-click opens the browser; right-click offers desktop items and Exit companion.
 - Closing the companion unregisters the appbar and removes its notification icon.
   A second instance exits without creating another panel.
 
 ## Implemented lifecycle behavior
 
-The appbar reserves primary-monitor screen space through
+When available, the appbar reserves primary-monitor screen space through
 [SHAppBarMessage](https://learn.microsoft.com/en-us/windows/win32/shell/application-desktop-toolbars).
 It repositions after display changes, lowers itself on fullscreen-app
 notifications, and attempts to re-register the appbar and notification icon after
@@ -84,8 +107,9 @@ It does not implement a replacement host for other applications' tray icons.
 ## Validation
 
 The Windows executable and test executables cross-compile with MinGW. Portable
-window-filter and layout tests pass on Linux, along with the browser's filesystem
-and GUI tests. No native Windows execution has been performed in this workspace.
+window-filter, layout, background-file selection/reload and filesystem tests run
+on Linux. The GUI smoke check requires a display. No native Windows execution
+has been performed in this workspace.
 
 Build the native smoke checks with:
 
@@ -102,10 +126,11 @@ On Windows, with no companion already running, execute:
 The smoke mode briefly opens the appbar, background and desktop preview, then
 launches the same executable in browser smoke mode and waits for a successful exit. It checks
 control creation, background bounds, focus preservation, input suppression,
-hide/show, own-window exclusion, reserved space and destruction/restoration on exit, then
+hide/show, own-window exclusion, reserved space, menu-icon creation/scaling/cache
+reuse and destruction/restoration on exit, then
 returns 0 for success or 1 for failure. When built with native CMake, it is also
 registered as `windows_shell_smoke` in CTest. Run in a disposable desktop session;
-Explorer and the display layout must remain stable during this check.
+The check stops Explorer just like normal taskbar startup. Keep the display layout stable.
 
 Manual checks still required:
 
@@ -124,6 +149,13 @@ Manual checks still required:
    returns. Test Win+D, Explorer restart and display changes separately.
 8. Test desktop shortcuts, user/public folders, inaccessible targets, Settings,
    and launching the browser from the same executable.
+9. Open Programs submenus and confirm common applications show their own icons
+   at 100%, 150% and 200% scaling. Check a broken shortcut's fallback, change a
+   shortcut icon, then reopen Start. Repeat menu opening to check icon reuse.
+10. Use Open background folder, add PNG/JPEG/BMP images, and confirm stretching
+    ends at the taskbar edge. Replace the selected file, remove it, and add a
+    corrupt image. Verify updates and the blue fallback. Check multiple files,
+    resolution changes, hide/show and focus preservation.
 
 ## Remaining scope
 
@@ -141,9 +173,9 @@ layering, Win+D and Explorer restart behavior need native verification. The
 surface is repositioned on display/work-area changes and the one-second refresh.
 It uses [non-activating window styles](https://learn.microsoft.com/en-us/windows/win32/winmsg/extended-window-styles)
 and [SetWindowPos](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowpos).
-There is no wallpaper file picker, desktop drag-and-drop or persistent icon
-positioning. The separate Desktop items command still opens an interactive preview
+Background selection uses the background folder; there is no wallpaper file
+picker, desktop drag-and-drop or persistent icon positioning. The separate Desktop items command still opens an interactive preview
 window; the background itself has no interactive content. Other
-applications' tray icons, system flyouts and notification history remain provided
-by Explorer. Replacement mode, session startup and crash recovery still require
+applications' tray icons, system flyouts and notification history are unavailable
+while Explorer is stopped. Session startup and crash recovery still require
 the compatibility work in [the shell plan](windows-shell-plan.md).
