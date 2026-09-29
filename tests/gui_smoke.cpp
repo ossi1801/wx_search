@@ -1,5 +1,4 @@
-#define EXPLORER_GUI_TEST
-#include "../main.cpp"
+#include "../browser/explorer_frame.h"
 #include <wx/timer.h>
 #include <fstream>
 #include <iostream>

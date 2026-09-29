@@ -1,6 +1,10 @@
 # Windows shell expansion plan
 
-Status: proposed architecture; no shell replacement is enabled by this document.
+Status: browser extraction and build unification implemented. Home-directory and
+file-opening platform boundaries are in place with existing behavior preserved.
+Linux filesystem and GUI smoke tests passed; Windows MinGW cross-build passed.
+Native Windows validation and the shell compatibility spike remain pending.
+No shell replacement is enabled. See [validation tracking](windows-compatibility.md).
 
 ## Goal and scope
 
@@ -12,7 +16,7 @@ Deliver three modes:
 2. **Companion (Windows, opt-in):** preview the launcher and panel alongside the normal Windows shell. Explorer continues to provide its desktop and notification area.
 3. **Replacement (Windows, experimental initially):** a separate shell process owns the desktop and panel for a dedicated test account. Enable only after compatibility and recovery gates pass.
 
-## Current starting point
+## Original starting point (before extraction)
 
 - `main.cpp` contains `ExplorerFrame`, commands, wxWidgets layout, and application startup.
 - `filesystem_model.h` provides the portable filesystem model.

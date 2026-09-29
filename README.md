@@ -39,13 +39,13 @@ For a custom wxWidgets installation:
 On Debian/Ubuntu, install the cross-compiler once:
 
 ```sh
-sudo apt install g++-mingw-w64-x86-64-posix make curl bzip2
+sudo apt install g++-mingw-w64-x86-64-posix cmake make curl bzip2
 ./bw.sh
 ```
 
 The result is **`build_windows/search.exe`**, a 64-bit Windows application. The first build downloads checksum-verified wxWidgets 3.2.8 sources and builds a static Windows SDK locally under `build_windows/`; later builds reuse it. No system wxWidgets installation for Windows is needed. The script uses four build jobs by default (`JOBS=2 ./bw.sh` uses two). From a Flatpak IDE it runs the build on the Linux host.
 
-The executable statically links wxWidgets and the compiler runtime; Windows system DLLs are still required. Override `WX_CONFIG` to use an existing Windows wxWidgets SDK, or `CC` / `CXX` for alternate MinGW compilers. Native Windows execution must be tested separately.
+The executable statically links wxWidgets and the compiler runtime; Windows system DLLs are still required. Override `WX_CONFIG` to use an existing Windows wxWidgets SDK, or `CC` / `CXX` for alternate MinGW compilers. Native Windows execution must be tested separately. `bw.sh` now configures the shared CMake targets in `build_windows/cmake` and copies the browser executable to the existing output path. Extra arguments are forwarded to CMake; cross-compiled tests are disabled by default.
 
 ## Shortcuts
 
@@ -82,3 +82,21 @@ ctest --test-dir build --output-on-failure
 On Linux, optional screenshot capture requires GTK 3 development headers. It exercises navigation history, recursive search, hidden results, both views, resizing, superseding an active scan, multi-file copy, cut/paste and text clipboard commands. It creates and cleans up its own temporary fixture. GTK builds save PNG layout captures in the build directory.
 
 ![Explorer details view](docs/explorer.png)
+
+## Architecture and Windows shell work
+
+`main.cpp` contains application startup. The browser implementation lives in
+`browser/explorer_frame.h` and `.cpp`, built as the `explorer_browser` library.
+The GUI smoke test links that same library rather than including the application
+entry point. `filesystem_model.h` remains independent of wxWidgets.
+
+`platform/services.h` provides the initial boundary for the home directory and
+opening files. CMake selects `platform/windows/services.cpp` on Windows and the
+portable adapter on other systems. Both initially retain the existing wxWidgets
+behavior. Linux build commands and application behavior are preserved.
+
+The [Windows shell plan](docs/windows-shell-plan.md) describes subsequent native
+integration and an optional, separate desktop shell. The browser/build extraction
+is implemented; desktop, taskbar, launcher, tray hosting and shell activation are
+still pending. See the [compatibility checklist](docs/windows-compatibility.md)
+for the native Windows validation required before shell replacement.

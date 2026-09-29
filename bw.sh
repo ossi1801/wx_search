@@ -9,10 +9,10 @@ fi
 : "${CXX:=x86_64-w64-mingw32-g++-posix}"
 : "${CC:=x86_64-w64-mingw32-gcc-posix}"
 : "${JOBS:=4}"
-for tool in "$CXX" "$CC" make curl tar sha256sum; do
+for tool in "$CXX" "$CC" cmake make curl tar sha256sum; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         echo "Missing Windows build tool: $tool" >&2
-        echo "On Debian/Ubuntu: sudo apt install g++-mingw-w64-x86-64-posix make curl bzip2" >&2
+        echo "On Debian/Ubuntu: sudo apt install g++-mingw-w64-x86-64-posix cmake make curl bzip2" >&2
         exit 1
     fi
 done
@@ -47,8 +47,13 @@ if [ -z "${WX_CONFIG:-}" ]; then
         )
     fi
 fi
-# wx-config deliberately emits a resource command and separate compiler/linker arguments.
-$("$WX_CONFIG" --rescomp) -i resources/windows.rc -o "$output/windows-resources.o"
-"$CXX" -std=c++17 -O2 -Wall -Wextra main.cpp $("$WX_CONFIG" --cxxflags --libs core,base) \
-    "$output/windows-resources.o" -o "$output/search.exe" -static -static-libgcc -static-libstdc++ -mwindows
+# Use the same targets and source lists as the native Linux build.
+CC="$CC" CXX="$CXX" cmake -S . -B "$output/cmake" -G "Unix Makefiles" \
+    -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/mingw-toolchain.cmake" \
+    -DwxWidgets_CONFIG_EXECUTABLE="$WX_CONFIG" \
+    -DwxWidgets_USE_STATIC=ON -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_EXE_LINKER_FLAGS="-static -static-libgcc -static-libstdc++" \
+    -DBUILD_TESTING=OFF "$@"
+cmake --build "$output/cmake" --parallel "$JOBS"
+cp "$output/cmake/searchwx.exe" "$output/search.exe"
 printf '\nWindows executable: %s/search.exe\n' "$output"
