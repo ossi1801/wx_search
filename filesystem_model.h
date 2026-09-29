@@ -58,12 +58,28 @@ inline ScanResult scan(const fs::path& root, const std::string& query, bool show
         fs::directory_iterator it(root, ec), end;
         while (!ec && it != end && !cancel) { collect(*it); it.increment(ec); }
     } else {
-        fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
-        while (!ec && it != end && !cancel) {
-            if (!showHidden && hidden(it->path())) it.disable_recursion_pending();
-            else collect(*it);
-            if (result.entries.size() >= 50000) { result.truncated = true; break; }
-            it.increment(ec);
+        // Keep each directory independent: an error in one subtree must not
+        // discard the iterator state for all remaining siblings.
+        std::vector<fs::path> pending{root};
+        while (!pending.empty() && !cancel && !result.truncated) {
+            const auto folder = pending.back();
+            pending.pop_back();
+            std::error_code folderError;
+            fs::directory_iterator it(folder, folderError), end;
+            while (!folderError && it != end && !cancel) {
+                const auto item = *it;
+                if (showHidden || !hidden(item.path())) {
+                    collect(item);
+                    std::error_code statusError;
+                    const auto status = item.symlink_status(statusError);
+                    if (!statusError && fs::is_directory(status))
+                        pending.push_back(item.path());
+                    if (statusError && result.error.empty()) result.error = statusError.message();
+                }
+                if (result.entries.size() >= 50000) { result.truncated = true; break; }
+                it.increment(folderError);
+            }
+            if (folderError && result.error.empty()) result.error = folderError.message();
         }
     }
     if (ec) result.error = ec.message();

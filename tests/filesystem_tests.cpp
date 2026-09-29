@@ -26,6 +26,19 @@ int main() {
         fs::create_directory_symlink(root, root / "nested" / "loop", ec);
         if (!ec) check(scan(root, "report", false, cancel).entries.size() == 2, "search must not follow symlink cycles");
         check(!scan(root / "missing", "", false, cancel).error.empty(), "missing directory must report an error");
+        const auto deep = root / "deep" / "one" / "two" / "three" / "four" / "five";
+        fs::create_directories(deep);
+        std::ofstream(deep / "desktop.ini") << "settings";
+        check(scan(root, "desktop.ini", true, cancel).entries.size() == 1,
+              "search from root must reach deeply nested files");
+#ifndef _WIN32
+        const auto blocked = root / "unreadable";
+        fs::create_directory(blocked);
+        fs::permissions(blocked, fs::perms::none);
+        auto partial = scan(root, "desktop.ini", true, cancel);
+        fs::permissions(blocked, fs::perms::owner_all);
+        check(partial.entries.size() == 1, "unreadable subtree must not stop other folders");
+#endif
         cancel = true;
         check(scan(root, "", true, cancel).entries.empty(), "cancelled scan must stop");
         check(validName("New folder") && validName("résumé.txt"), "normal names must be accepted");
