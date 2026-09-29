@@ -4,7 +4,10 @@
 #include <cctype>
 #include <filesystem>
 #include <string>
+#include <stdexcept>
 #include <vector>
+#include <set>
+#include <functional>
 
 namespace explorer {
 namespace fs = std::filesystem;
@@ -65,6 +68,79 @@ inline ScanResult scan(const fs::path& root, const std::string& query, bool show
     }
     if (ec) result.error = ec.message();
     return result;
+}
+// Never merge or overwrite a destination. Preserve links instead of following them.
+inline void transfer(const fs::path& source, const fs::path& folder, bool move) {
+    const auto target = folder / source.filename();
+    if (source.filename().empty()) throw std::runtime_error("Cannot transfer a filesystem root.");
+    if (!fs::is_directory(folder)) throw std::runtime_error("Destination folder is unavailable.");
+    if (fs::exists(fs::symlink_status(target)))
+        throw std::runtime_error("An item with that name already exists: " + target.u8string());
+    if (fs::is_directory(source) && !fs::is_symlink(source)) {
+        const auto canonicalSource = fs::canonical(source);
+        auto ancestor = fs::canonical(folder);
+        while (!ancestor.empty()) {
+            if (fs::equivalent(canonicalSource, ancestor))
+                throw std::runtime_error("Cannot paste a folder into itself or its subfolders.");
+            const auto parent = ancestor.parent_path();
+            if (parent == ancestor) break;
+            ancestor = parent;
+        }
+    }
+    if (move) {
+        std::error_code ec;
+        fs::rename(source, target, ec);
+        if (!ec) return;
+        if (ec != std::errc::cross_device_link) throw fs::filesystem_error("Move failed", source, target, ec);
+    }
+    // If copying fails, retain the source, including for cross-device moves.
+    fs::copy(source, target, fs::copy_options::recursive | fs::copy_options::copy_symlinks);
+    if (move) fs::remove_all(source);
+}
+struct DeletePlan {
+    std::vector<fs::path> items; // Children follow parents; remove in reverse order.
+    uintmax_t bytes = 0;
+};
+inline DeletePlan planDelete(const std::vector<fs::path>& selected,
+                             const std::function<bool(size_t)>& progress = {}) {
+    DeletePlan plan;
+    std::set<fs::path> seen;
+    auto add = [&](const fs::path& path) {
+        auto absolute = fs::absolute(path).lexically_normal();
+        if (absolute == absolute.root_path()) throw std::runtime_error("Cannot delete a filesystem root.");
+        if (!seen.insert(absolute).second) return;
+        auto status = fs::symlink_status(absolute);
+        if (!fs::exists(status)) throw std::runtime_error("An item is no longer available: " + absolute.u8string());
+        plan.items.push_back(absolute);
+        if (fs::is_regular_file(status)) plan.bytes += fs::file_size(absolute);
+        if (progress && !progress(plan.items.size())) throw std::runtime_error("Counting cancelled. Nothing was deleted.");
+    };
+    // Sort parents before children even when both are selected in search results.
+    auto roots = selected;
+    std::sort(roots.begin(), roots.end());
+    for (const auto& path : roots) {
+        if (seen.count(fs::absolute(path).lexically_normal())) continue;
+        add(path);
+        if (fs::is_directory(fs::symlink_status(path)))
+            for (const auto& item : fs::recursive_directory_iterator(path)) add(item.path());
+    }
+    return plan;
+}
+inline std::string executeDelete(const DeletePlan& plan,
+                                const std::function<bool(size_t)>& progress = {}) {
+    size_t completed = 0;
+    std::string errors;
+    for (auto it = plan.items.rbegin(); it != plan.items.rend(); ++it) {
+        if (progress && !progress(completed)) {
+            errors += "Deletion stopped. Some items may already have been deleted.\n";
+            break;
+        }
+        std::error_code ec;
+        fs::remove(*it, ec); // Do not recursively remove items added after confirmation.
+        if (ec) errors += it->u8string() + ": " + ec.message() + "\n";
+        ++completed;
+    }
+    return errors;
 }
 inline bool validName(const std::string& name) {
     return !name.empty() && name != "." && name != ".." &&

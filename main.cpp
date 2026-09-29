@@ -3,6 +3,8 @@
 #include <wx/clipbrd.h>
 #include <wx/dataobj.h>
 #include <wx/filename.h>
+#include <wx/file.h>
+#include <wx/progdlg.h>
 #include <wx/imaglist.h>
 #include <wx/listctrl.h>
 #include <wx/srchctrl.h>
@@ -11,6 +13,7 @@
 #include <wx/statline.h>
 #include <wx/wrapsizer.h>
 #include <chrono>
+#include <cstring>
 #include <memory>
 #include <thread>
 #include "filesystem_model.h"
@@ -42,7 +45,7 @@ wxString dateOf(const Entry& entry) {
 wxDECLARE_EVENT(EVT_SCAN_DONE, wxThreadEvent);
 wxDEFINE_EVENT(EVT_SCAN_DONE, wxThreadEvent);
 enum { Back = wxID_HIGHEST + 1, Forward, Up, Home, RefreshFolder, NewFolder, Rename,
-       CopyPath, Properties, Hidden, Details, Icons, FocusAddress, FocusSearch, StopSearch };
+       CopyPath, Properties, Hidden, Details, Icons, FocusAddress, FocusSearch, StopSearch, CutFiles, CopyFiles, PasteFiles, DeleteFiles, NewFile };
 
 class ExplorerFrame final : public wxFrame {
     friend class ExplorerSmokeTest;
@@ -63,6 +66,8 @@ class ExplorerFrame final : public wxFrame {
     bool showHidden = false, iconView = false, ascending = true, busy = false;
     int sortColumn = 0;
     wxString query;
+    std::vector<fs::path> cutPaths;
+    std::string cutToken;
 
     wxButton* button(wxWindow* parent, wxSizer* sizer, const wxString& label,
                      std::function<void()> action, const wxArtID& art = wxEmptyString) {
@@ -82,10 +87,16 @@ class ExplorerFrame final : public wxFrame {
     void menus() {
         auto* file = new wxMenu;
         file->Append(NewFolder, "New &folder\tCtrl+Shift+N");
+        file->Append(NewFile, "New &file\tCtrl+N");
+        file->Append(DeleteFiles, "&Delete...");
         file->Append(Rename, "&Rename\tF2");
         file->Append(CopyPath, "Copy &path\tCtrl+Shift+C");
         file->Append(Properties, "&Properties\tAlt+Enter");
         file->AppendSeparator(); file->Append(wxID_EXIT, "E&xit\tAlt+F4");
+        auto* edit = new wxMenu;
+        edit->Append(CutFiles, "Cu&t\tCtrl+X");
+        edit->Append(CopyFiles, "&Copy\tCtrl+C");
+        edit->Append(PasteFiles, "&Paste\tCtrl+V");
         auto* view = new wxMenu;
         view->AppendRadioItem(Details, "&Details"); view->AppendRadioItem(Icons, "Large &icons");
         view->AppendSeparator(); view->AppendCheckItem(Hidden, "Show &hidden files\tCtrl+H");
@@ -96,13 +107,13 @@ class ExplorerFrame final : public wxFrame {
         go->Append(FocusAddress, "&Address bar\tCtrl+L"); go->Append(FocusSearch, "&Search\tCtrl+F");
         auto* help = new wxMenu; help->Append(wxID_ABOUT, "&About Explorer");
         auto* bar = new wxMenuBar;
-        bar->Append(file, "&File"); bar->Append(view, "&View"); bar->Append(go, "&Go"); bar->Append(help, "&Help");
+        bar->Append(file, "&File"); bar->Append(edit, "&Edit"); bar->Append(view, "&View"); bar->Append(go, "&Go"); bar->Append(help, "&Help");
         SetMenuBar(bar);
         Bind(wxEVT_MENU, [this](wxCommandEvent& e) { command(e.GetId()); });
     }
     void makeList() {
         list->ClearAll();
-        list->SetWindowStyleFlag((iconView ? wxLC_ICON | wxLC_ALIGN_TOP : wxLC_REPORT) | wxLC_SINGLE_SEL | wxBORDER_NONE);
+        list->SetWindowStyleFlag((iconView ? wxLC_ICON | wxLC_ALIGN_TOP : wxLC_REPORT) | wxBORDER_NONE);
         if (!iconView) {
             list->InsertColumn(0, "Name", wxLIST_FORMAT_LEFT, 300);
             list->InsertColumn(1, "Date modified", wxLIST_FORMAT_LEFT, 175);
@@ -118,8 +129,7 @@ class ExplorerFrame final : public wxFrame {
         return 1;
     }
     void render() {
-        fs::path selected;
-        auto old = selectedEntry(); if (old) selected = old->path;
+        const auto selected = selectedPaths();
         // Item data stores the model index, which remains valid during sorting.
         std::sort(entries.begin(), entries.end(), [this](const Entry& a, const Entry& b) {
             if (a.directory != b.directory) return a.directory;
@@ -152,7 +162,7 @@ class ExplorerFrame final : public wxFrame {
                 if (!query.empty()) list->SetItem(row, 4, text(entry.path.parent_path()));
                 if (i % 2) list->SetItemBackgroundColour(row, wxColour("#F5F8FC"));
             }
-            if (entry.path == selected) list->SetItemState(row, wxLIST_STATE_SELECTED, wxLIST_STATE_SELECTED);
+            if (std::find(selected.begin(), selected.end(), entry.path) != selected.end()) list->SetItemState(row, wxLIST_STATE_SELECTED, wxLIST_STATE_SELECTED);
         }
         if (iconView) list->Arrange();
         list->Thaw();
@@ -212,7 +222,7 @@ class ExplorerFrame final : public wxFrame {
             parts.erase(parts.begin(), parts.end() - 4);
         }
         for (const auto& p : parts) {
-            crumbSizer->Add(new wxStaticText(crumbs, wxID_ANY, "›"), 0, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, 5);
+            crumbSizer->Add(new wxStaticText(crumbs, wxID_ANY, ">"), 0, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, 5);
             add(p, text(p.filename()));
         }
         crumbs->Layout();
@@ -279,8 +289,147 @@ class ExplorerFrame final : public wxFrame {
             error(ec ? wxString::FromUTF8(ec.message()) : "An item with that name already exists.");
         else scan();
     }
-    void command(int id) {
+    bool createFileNamed(const wxString& name) {
+        if (!explorer::validName(name.ToStdString(wxConvUTF8))) {
+            error("Enter a single file name, without slashes."); return false;
+        }
+        wxFile file;
+        if (!file.Create(text(current / pathOf(name)), false)) {
+            error("Could not create the file. The name may already exist or the folder may not be writable.");
+            return false;
+        }
+        if (!file.Close()) { error("Could not finish creating the file."); return false; }
+        scan(); return true;
+    }
+    void newFile() {
+        wxTextEntryDialog dialog(this, "File name (you can change the extension):", "New file", "New file.txt");
+        if (dialog.ShowModal() == wxID_OK) createFileNamed(dialog.GetValue());
+    }
+    void deleteSelected() {
+        const auto paths = selectedPaths();
+        if (paths.empty()) return;
+        explorer::DeletePlan plan;
+        try {
+            wxProgressDialog progress("Preparing deletion", "Counting files and folders...", 100, this,
+                                      wxPD_APP_MODAL | wxPD_CAN_ABORT | wxPD_ELAPSED_TIME);
+            plan = explorer::planDelete(paths, [&](size_t count) {
+                return count % 128 != 0 || progress.Pulse(wxString::Format("Counting: %zu items", count));
+            });
+        } catch (const std::exception& e) { error(wxString::FromUTF8(e.what())); return; }
+        wxString names;
+        for (size_t i = 0; i < paths.size() && i < 10; ++i) names += text(paths[i].filename()) + "\n";
+        if (paths.size() > 10) names += wxString::Format("...and %zu more selected items\n", paths.size() - 10);
+        const auto message = "Are you sure you want to permanently delete?\n\n" + names +
+            wxString::Format("\n%zu items, including selected files/folders and all their contents.\n", plan.items.size()) +
+            "Total file size: " + humanSize(plan.bytes) + "\n\nThis cannot be undone. Items will not go to the Trash or Recycle Bin.";
+        if (wxMessageBox(message, "Confirm deletion", wxYES_NO | wxNO_DEFAULT | wxICON_WARNING, this) != wxYES) return;
+        std::string errors;
+        {
+            wxProgressDialog progress("Deleting", "Deleting selected items...", 100, this,
+                                      wxPD_APP_MODAL | wxPD_CAN_ABORT | wxPD_ELAPSED_TIME);
+            errors = explorer::executeDelete(plan, [&](size_t count) {
+                return count % 128 != 0 || progress.Update(static_cast<int>(100.0 * count / plan.items.size()),
+                    wxString::Format("Deleting: %zu of %zu items", count, plan.items.size()));
+            });
+        }
+        scan();
+        if (!errors.empty()) error(wxString::FromUTF8(errors));
+    }
+    std::vector<fs::path> selectedPaths() const {
+        std::vector<fs::path> paths;
+        for (long row = list->GetNextItem(-1, wxLIST_NEXT_ALL, wxLIST_STATE_SELECTED); row >= 0;
+             row = list->GetNextItem(row, wxLIST_NEXT_ALL, wxLIST_STATE_SELECTED)) {
+            auto index = list->GetItemData(row);
+            if (index < entries.size()) paths.push_back(entries[index].path);
+        }
+        return paths;
+    }
+    void copyFiles(bool cut) {
+        auto paths = selectedPaths();
+        if (paths.empty()) return;
+        if (!wxTheClipboard->Open()) { error("Cannot open the clipboard."); return; }
+        auto* data = new wxDataObjectComposite;
+        auto* files = new wxFileDataObject;
+        for (const auto& path : paths) files->AddFile(text(path));
+        data->Add(files, true);
+        const auto token = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+        if (cut) {
+            auto* marker = new wxCustomDataObject(wxDataFormat("application/x-rexplorer-cut"));
+            marker->SetData(token.size(), token.data()); data->Add(marker);
+        }
+        const bool ok = wxTheClipboard->SetData(data);
+        wxTheClipboard->Close();
+        if (!ok) { error("Could not put files on the clipboard."); return; }
+        cutPaths = cut ? paths : std::vector<fs::path>{}; cutToken = cut ? token : "";
+        SetStatusText(wxString::Format("%zu item(s) %s; open a folder and paste.", paths.size(), cut ? "cut" : "copied"));
+    }
+    void pasteFiles() {
+        if (!wxTheClipboard->Open()) { error("Cannot open the clipboard."); return; }
+        wxFileDataObject files;
+        const bool available = wxTheClipboard->GetData(files);
+        wxCustomDataObject marker(wxDataFormat("application/x-rexplorer-cut"));
+        const bool ours = wxTheClipboard->GetData(marker) && !cutToken.empty() &&
+            marker.GetSize() == cutToken.size() &&
+            std::memcmp(marker.GetData(), cutToken.data(), cutToken.size()) == 0;
+        wxTheClipboard->Close();
+        if (!available) { SetStatusText("No files on the clipboard."); return; }
+        wxBusyCursor cursor;
+        wxString errors;
+        size_t completed = 0;
+        for (const auto& name : files.GetFilenames()) {
+            const auto source = pathOf(name);
+            auto cut = std::find(cutPaths.begin(), cutPaths.end(), source);
+            // A consumed cut entry must never be moved a second time.
+            if (ours && cut == cutPaths.end()) continue;
+            try {
+                explorer::transfer(source, current, ours);
+                if (ours) cutPaths.erase(cut);
+                ++completed;
+            } catch (const std::exception& e) {
+                errors += text(source.filename()) + ": " + wxString::FromUTF8(e.what()) + "\n";
+            }
+        }
+        scan();
+        if (!errors.empty()) error("Some items could not be pasted (sources retained on copy failure):\n\n" + errors);
+        else SetStatusText(wxString::Format("Pasted %zu item(s).", completed));
+    }
+    void prepareContextSelection(long row) {
+        if (row >= 0 && !(list->GetItemState(row, wxLIST_STATE_SELECTED) & wxLIST_STATE_SELECTED)) {
+            list->SetItemState(-1, 0, wxLIST_STATE_SELECTED);
+            list->SetItemState(row, wxLIST_STATE_SELECTED | wxLIST_STATE_FOCUSED,
+                               wxLIST_STATE_SELECTED | wxLIST_STATE_FOCUSED);
+        }
+    }
+    void populateFileMenu(wxMenu& menu) {
+        const bool selected = selectedEntry() != nullptr;
+        menu.Append(wxID_OPEN, "Open"); menu.Append(Rename, "Rename");
+        menu.AppendSeparator();
+        menu.Append(CutFiles, "Cut\tCtrl+X"); menu.Append(CopyFiles, "Copy\tCtrl+C");
+        menu.Append(PasteFiles, "Paste\tCtrl+V");
+        menu.AppendSeparator();
+        menu.Append(DeleteFiles, "Delete...");
+        menu.Append(NewFile, "New file...");
+        menu.Append(NewFolder, "New folder"); menu.Append(CopyPath, "Copy path");
+        menu.Append(Properties, "Properties");
+        for (int id : {static_cast<int>(wxID_OPEN), static_cast<int>(Rename), static_cast<int>(CutFiles),
+                       static_cast<int>(CopyFiles), static_cast<int>(DeleteFiles), static_cast<int>(Properties)}) menu.Enable(id, selected);
+        menu.Bind(wxEVT_MENU, [this](wxCommandEvent& event) {
+            if (event.GetId() == wxID_OPEN) openSelected(); else command(event.GetId(), true);
+        });
+    }
+    void command(int id, bool fileAction = false) {
+        if (!fileAction && (id == CopyFiles || id == CutFiles || id == PasteFiles)) {
+            if (auto* input = dynamic_cast<wxTextEntryBase*>(wxWindow::FindFocus())) {
+                if (id == CopyFiles) input->Copy();
+                else if (id == CutFiles) input->Cut();
+                else input->Paste();
+                return;
+            }
+        }
         switch (id) {
+        case CopyFiles: copyFiles(false); break;
+        case CutFiles: copyFiles(true); break;
+        case PasteFiles: pasteFiles(); break;
         case Back: if (historyIndex > 0) {
             const auto index = historyIndex - 1; navigate(history[index], false);
             if (current == history[index]) historyIndex = index;
@@ -295,6 +444,8 @@ class ExplorerFrame final : public wxFrame {
         case Home: navigate(pathOf(wxGetHomeDir())); break;
         case RefreshFolder: scan(); break;
         case NewFolder: newFolder(); break;
+        case NewFile: newFile(); break;
+        case DeleteFiles: deleteSelected(); break;
         case Rename: renameSelected(); break;
         case Properties: properties(); break;
         case CopyPath: {
@@ -323,7 +474,11 @@ public:
         tool(Back, "Back", wxART_GO_BACK); tool(Forward, "Forward", wxART_GO_FORWARD); tool(Up, "Up", wxART_GO_UP);
         toolbar->AddSeparator(); tool(Home, "Home", wxART_GO_HOME); tool(RefreshFolder, "Refresh", wxART_REDO);
         toolbar->AddSeparator(); tool(NewFolder, "New folder", wxART_NEW_DIR); tool(Properties, "Properties", wxART_INFORMATION);
+        toolbar->AddSeparator();
+        tool(CutFiles, "Cut", wxART_CUT); tool(CopyFiles, "Copy", wxART_COPY); tool(PasteFiles, "Paste", wxART_PASTE);
+        tool(NewFile, "New file", wxART_NEW); tool(DeleteFiles, "Delete", wxART_DELETE);
         toolbar->Realize();
+        toolbar->Bind(wxEVT_TOOL, [this](wxCommandEvent& event) { command(event.GetId(), true); });
         CreateStatusBar(2); int widths[] = {240, -1}; GetStatusBar()->SetStatusWidths(2, widths);
         auto* root = new wxPanel(this);
         root->SetBackgroundColour(wxColour("#F1F3F7"));
@@ -344,10 +499,6 @@ public:
         scrollingSide->SetScrollRate(0, 12);
         side = scrollingSide; side->SetBackgroundColour(wxColour("#DDE8F8"));
         auto* sideOuter = new wxBoxSizer(wxVERTICAL); auto* sideSizer = new wxBoxSizer(wxVERTICAL);
-        section(sideSizer, "FILE AND FOLDER TASKS");
-        button(side, sideSizer, "Make a new folder", [this] { newFolder(); }, wxART_NEW_DIR);
-        button(side, sideSizer, "Rename this item", [this] { renameSelected(); }, wxART_EDIT);
-        button(side, sideSizer, "Copy path", [this] { command(CopyPath); }, wxART_COPY);
         section(sideSizer, "OTHER PLACES");
         const auto home = pathOf(wxGetHomeDir());
         button(side, sideSizer, "Home", [this, home] { navigate(home); }, wxART_GO_HOME);
@@ -370,7 +521,7 @@ public:
         content->Add(subtitle, 0, wxEXPAND | wxALL, 18);
         content->Add(new wxStaticLine(body), 0, wxEXPAND);
         empty = new wxStaticText(body, wxID_ANY, ""); content->Add(empty, 0, wxALL, 24); empty->Hide();
-        list = new wxListCtrl(body, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL | wxBORDER_NONE);
+        list = new wxListCtrl(body, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxBORDER_NONE);
         for (int size : {16, 48}) {
             auto* images = new wxImageList(size, size, true);
             for (const auto& art : {wxART_FOLDER, wxART_NORMAL_FILE, wxART_EXECUTABLE_FILE})
@@ -390,6 +541,10 @@ public:
         auto beginSearch = [this](wxCommandEvent&) { query = search->GetValue().Strip(wxString::both); scan(); };
         search->Bind(wxEVT_TEXT_ENTER, beginSearch); search->Bind(wxEVT_SEARCHCTRL_SEARCH_BTN, beginSearch);
         search->Bind(wxEVT_SEARCHCTRL_CANCEL_BTN, [this](wxCommandEvent&) { query.clear(); search->ChangeValue(""); scan(); });
+        list->Bind(wxEVT_KEY_DOWN, [this](wxKeyEvent& event) {
+            if (event.GetKeyCode() == WXK_DELETE && !event.HasAnyModifiers()) deleteSelected();
+            else event.Skip();
+        });
         list->Bind(wxEVT_LIST_ITEM_ACTIVATED, [this](wxListEvent&) { openSelected(); });
         list->Bind(wxEVT_LIST_COL_CLICK, [this](wxListEvent& e) {
             if (sortColumn == e.GetColumn()) ascending = !ascending; else { sortColumn = e.GetColumn(); ascending = true; }
@@ -401,13 +556,23 @@ public:
                                 (e->directory ? wxString{} : humanSize(e->size) + "\n") + "\n" + dateOf(*e));
             selection->Wrap(190); side->Layout();
         });
-        list->Bind(wxEVT_LIST_ITEM_RIGHT_CLICK, [this](wxListEvent& e) {
-            list->SetItemState(e.GetIndex(), wxLIST_STATE_SELECTED, wxLIST_STATE_SELECTED);
-            wxMenu menu; menu.Append(wxID_OPEN, "Open"); menu.Append(Rename, "Rename");
-            menu.Append(CopyPath, "Copy path"); menu.AppendSeparator(); menu.Append(Properties, "Properties");
-            menu.Bind(wxEVT_MENU, [this](wxCommandEvent& event) { if (event.GetId() == wxID_OPEN) openSelected(); else command(event.GetId()); });
-            PopupMenu(&menu);
-        });
+        auto contextMenu = [this](wxContextMenuEvent& event) {
+            long row = -1;
+            if (event.GetPosition() == wxDefaultPosition) {
+                row = list->GetNextItem(-1, wxLIST_NEXT_ALL, wxLIST_STATE_FOCUSED);
+            } else {
+                int flags = 0;
+                row = list->HitTest(list->ScreenToClient(event.GetPosition()), flags);
+            }
+            prepareContextSelection(row);
+            wxMenu menu;
+            populateFileMenu(menu);
+            list->SetFocus();
+            list->PopupMenu(&menu);
+        };
+        list->Bind(wxEVT_CONTEXT_MENU, contextMenu);
+        body->Bind(wxEVT_CONTEXT_MENU, contextMenu);
+        empty->Bind(wxEVT_CONTEXT_MENU, contextMenu);
         Bind(wxEVT_CHAR_HOOK, [this](wxKeyEvent& e) {
             if (e.GetKeyCode() == WXK_ESCAPE) { query.clear(); search->ChangeValue(""); scan(); }
             else e.Skip();

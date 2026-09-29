@@ -1,13 +1,14 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")"
-# Keep SDK and host caches separate: their /usr and /tmp paths differ.
+# Use the host toolchain from Flatpak IDE terminals, as bw.sh does.
 if [ -f /.flatpak-info ]; then
-    default_build_dir=build-flatpak
-else
-    default_build_dir=build-host
+    if [ "${BUILD_DIR+x}" = x ]; then
+        exec flatpak-spawn --host env BUILD_DIR="$BUILD_DIR" sh "$PWD/b.sh" "$@"
+    fi
+    exec flatpak-spawn --host sh "$PWD/b.sh" "$@"
 fi
-build_dir=${BUILD_DIR:-$default_build_dir}
+build_dir=${BUILD_DIR:-build-host}
 for tool in cmake make ctest; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         echo "Missing build tool: $tool" >&2
@@ -18,3 +19,11 @@ done
 cmake -S . -B "$build_dir" -G "Unix Makefiles" "$@"
 cmake --build "$build_dir" --parallel
 ctest --test-dir "$build_dir" --output-on-failure
+# Preserve the original launch path without sharing CMake caches.
+output_dir=$(cd "$build_dir" && pwd -P)
+mkdir -p build
+legacy_dir=$(cd build && pwd -P)
+if [ "$output_dir" != "$legacy_dir" ]; then
+    ln -sfn "$output_dir/searchwx" build/searchwx
+fi
+printf '\nLinux executable: %s/searchwx\nLaunch shortcut: %s/build/searchwx\n' "$output_dir" "$PWD"
