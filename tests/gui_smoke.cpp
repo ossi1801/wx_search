@@ -44,6 +44,8 @@ class ExplorerSmokeTest final : public wxApp {
             switch (phase++) {
             case 0:
                 require(frame->entries.size() == 3, "initial folder listing");
+                require(frame->GetTitle() == wxS("Explorer demo \u2014 Explorer"), "window title preserves Unicode punctuation");
+                require(frame->search->GetDescriptiveText() == wxS("Search this folder\u2026"), "search hint preserves Unicode punctuation");
                 snapshot("explorer-details.png");
                 frame->navigate(fixture / "Documents"); break;
             case 1:

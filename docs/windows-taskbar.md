@@ -67,6 +67,10 @@ startup behavior and do not compile the Windows shell sources.
 - Window buttons follow visible, titled application windows, including minimized
   windows. Tool windows, cloaked windows and companion-owned windows are excluded.
   The list refreshes each second and preserves existing button order.
+  Buttons show each window's application icon (window icon, class icon, then
+  executable icon), scaled with system DPI. The title appears in a tooltip and
+  remains the accessible name. If no icon is available, the button shows text.
+  Icon requests use a timeout so unresponsive applications cannot block indefinitely.
 - Click a window to activate or restore it. Clicking the active window minimizes
   it. If Windows denies foreground activation, the target flashes instead.
 - Right-click a task button for that window's system menu. Elevated applications
@@ -144,7 +148,7 @@ On Windows, with no companion already running, execute:
 The smoke mode briefly opens the appbar, background and desktop preview, then
 launches the same executable in browser smoke mode and waits for a successful exit. It checks
 control creation, background bounds, focus preservation, input suppression,
-hide/show, own-window exclusion, reserved space, menu-icon creation/scaling/cache
+hide/show, own-window exclusion, reserved space, task-icon attachment/text fallback, menu-icon creation/scaling/cache
 reuse and destruction/restoration on exit, then
 returns 0 for success or 1 for failure. When built with native CMake, it is also
 registered as `windows_shell_smoke` in CTest. Run in a disposable desktop session;
@@ -179,8 +183,8 @@ Manual checks still required:
 ## Remaining scope
 
 This is an initial companion implementation, not full Explorer parity. It has
-one primary-monitor panel, system DPI scaling, title buttons and a shortcut-based
-launcher. Per-monitor panels, dynamic DPI changes, task icons, pinning/grouping,
+one primary-monitor panel, system DPI scaling, application icon buttons and a shortcut-based
+launcher. Per-monitor panels, dynamic DPI changes, pinning/grouping,
 previews, jump lists, search and packaged-app enumeration are not implemented.
 Launcher enumeration and desktop icon lookup are synchronous; redirected network
 folders or slow icon handlers can delay those views.

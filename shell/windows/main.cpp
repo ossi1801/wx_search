@@ -31,6 +31,7 @@ bool registered = false, positioning = false, fullscreen = false;
 std::vector<HWND> taskButtons;
 HWND startButton{}, filesButton{}, moreButton{}, clockButton{};
 HICON startIcon{}, filesIcon{};
+HWND taskTips{};
 void layoutButtons();
 UINT taskbarCreated{};
 HFONT font{};
@@ -573,6 +574,46 @@ HWND makeButton(int id, const wchar_t* title, bool task = false) {
     return button;
 }
 
+// Window/class icons are borrowed from the application. Only attach owned copies
+// to our buttons, so an application changing or destroying its icon is harmless.
+HICON taskIcon(HWND window) {
+    const int size = MulDiv(24, dpi, 96);
+    for (WPARAM kind : {static_cast<WPARAM>(ICON_SMALL2), static_cast<WPARAM>(ICON_SMALL), static_cast<WPARAM>(ICON_BIG)}) {
+        DWORD_PTR result{};
+        if (SendMessageTimeoutW(window, WM_GETICON, kind, dpi,
+                SMTO_ABORTIFHUNG | SMTO_BLOCK, 50, &result) && result) {
+            if (auto icon = static_cast<HICON>(CopyImage(reinterpret_cast<HICON>(result), IMAGE_ICON, size, size, 0)))
+                return icon;
+        }
+    }
+    for (int kind : {GCLP_HICONSM, GCLP_HICON}) {
+        auto source = reinterpret_cast<HICON>(GetClassLongPtrW(window, kind));
+        if (source) {
+            if (auto icon = static_cast<HICON>(CopyImage(source, IMAGE_ICON, size, size, 0))) return icon;
+        }
+    }
+    DWORD pid{}; GetWindowThreadProcessId(window, &pid);
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!process) return nullptr;
+    wchar_t path[32768]{}; DWORD length = 32768;
+    const bool found = QueryFullProcessImageNameW(process, 0, path, &length) != FALSE;
+    CloseHandle(process);
+    if (!found) return nullptr;
+    HICON source{};
+    if (!ExtractIconExW(path, 0, nullptr, &source, 1) || !source) return nullptr;
+    auto icon = static_cast<HICON>(CopyImage(source, IMAGE_ICON, size, size, 0));
+    DestroyIcon(source);
+    return icon;
+}
+
+void setTaskIcon(HWND button, HICON icon) {
+    auto style = GetWindowLongPtrW(button, GWL_STYLE);
+    SetWindowLongPtrW(button, GWL_STYLE, icon ? style | BS_ICON : style & ~BS_ICON);
+    auto previous = reinterpret_cast<HICON>(SendMessageW(button, BM_SETIMAGE, IMAGE_ICON, reinterpret_cast<LPARAM>(icon)));
+    if (previous) DestroyIcon(previous);
+    InvalidateRect(button, nullptr, TRUE);
+}
+
 void layoutButtons() {
     if (!startButton) return;
     RECT rect{}; GetClientRect(bar, &rect);
@@ -580,17 +621,29 @@ void layoutButtons() {
     const auto layout = explorer::taskbar::layout(width, dpi, tasks.size());
     visibleTasks = layout.count;
     buttonWidth = layout.taskWidth;
-    while (taskButtons.size() < static_cast<size_t>(visibleTasks))
-        taskButtons.push_back(makeButton(WindowFirst + static_cast<int>(taskButtons.size()), L"", true));
+    if (!taskTips) taskTips = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr,
+        WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX, CW_USEDEFAULT, CW_USEDEFAULT,
+        CW_USEDEFAULT, CW_USEDEFAULT, bar, nullptr, GetModuleHandleW(nullptr), nullptr);
+    while (taskButtons.size() < static_cast<size_t>(visibleTasks)) {
+        HWND button = makeButton(WindowFirst + static_cast<int>(taskButtons.size()), L"", true);
+        taskButtons.push_back(button);
+        if (taskTips) {
+            TOOLINFOW tool{}; tool.cbSize = sizeof(tool); tool.hwnd = bar;
+            tool.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+            tool.uId = reinterpret_cast<UINT_PTR>(button); tool.lpszText = LPSTR_TEXTCALLBACKW;
+            SendMessageW(taskTips, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&tool));
+        }
+    }
     MoveWindow(startButton, 0, 0, layout.start, height, TRUE);
     MoveWindow(filesButton, layout.start, 0, layout.files, height, TRUE);
     MoveWindow(moreButton, width - layout.more - layout.clock, 0, layout.more, height, TRUE);
     MoveWindow(clockButton, width - layout.clock, 0, layout.clock, height, TRUE);
     HWND foreground = GetForegroundWindow();
     for (size_t i = 0; i < taskButtons.size(); ++i) {
-        if (i >= static_cast<size_t>(visibleTasks)) { ShowWindow(taskButtons[i], SW_HIDE); continue; }
+        if (i >= static_cast<size_t>(visibleTasks)) { setTaskIcon(taskButtons[i], nullptr); ShowWindow(taskButtons[i], SW_HIDE); continue; }
         SetWindowSubclass(taskButtons[i], taskButtonProc, 1, reinterpret_cast<DWORD_PTR>(tasks[i].window));
         SetWindowTextW(taskButtons[i], menuLabel(tasks[i].title).c_str());
+        setTaskIcon(taskButtons[i], taskIcon(tasks[i].window));
         SendMessageW(taskButtons[i], BM_SETCHECK, tasks[i].window == foreground ? BST_CHECKED : BST_UNCHECKED, 0);
         MoveWindow(taskButtons[i], layout.taskLeft() + static_cast<int>(i) * buttonWidth, 0, buttonWidth, height, TRUE);
         ShowWindow(taskButtons[i], SW_SHOWNOACTIVATE);
@@ -626,6 +679,22 @@ LRESULT CALLBACK barProc(HWND window, UINT message, WPARAM w, LPARAM l) {
         return 0;
     }
     switch (message) {
+    case WM_NOTIFY: {
+        auto header = reinterpret_cast<NMHDR*>(l);
+        if (header->hwndFrom == taskTips && header->code == TTN_GETDISPINFOW) {
+            auto info = reinterpret_cast<NMTTDISPINFOW*>(l);
+            static wchar_t title[1024];
+            const auto button = reinterpret_cast<HWND>(header->idFrom);
+            const auto it = std::find(taskButtons.begin(), taskButtons.end(), button);
+            const auto index = static_cast<size_t>(it - taskButtons.begin());
+            if (it != taskButtons.end() && index < tasks.size()) {
+                lstrcpynW(title, tasks[index].title.c_str(), 1024);
+                info->lpszText = title;
+            }
+            return 0;
+        }
+        break;
+    }
     case WM_INITMENUPOPUP: populateMenuIcons(reinterpret_cast<HMENU>(w)); return 0;
     case WM_SIZE: layoutButtons(); return 0;
     case WM_PAINT: {
@@ -686,6 +755,7 @@ LRESULT CALLBACK barProc(HWND window, UINT message, WPARAM w, LPARAM l) {
         if (startIcon) DestroyIcon(startIcon);
         if (filesIcon) DestroyIcon(filesIcon);
         startIcon = filesIcon = nullptr;
+        for (HWND button : taskButtons) setTaskIcon(button, nullptr);
         clearMenuIcons();
         explorer::background::destroy();
         if (desktop) DestroyWindow(desktop);
@@ -768,6 +838,18 @@ int runWindowsShell(HINSTANCE instance, bool smokeTest) {
         passed = passed && startIcon && filesIcon &&
             SendMessageW(startButton, BM_GETIMAGE, IMAGE_ICON, 0) == reinterpret_cast<LRESULT>(startIcon) &&
             SendMessageW(filesButton, BM_GETIMAGE, IMAGE_ICON, 0) == reinterpret_cast<LRESULT>(filesIcon);
+        HWND iconProbe = makeButton(WindowFirst - 1, L"Icon probe", true);
+        SendMessageW(iconProbe, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(filesIcon));
+        HICON probeIcon = taskIcon(iconProbe);
+        setTaskIcon(iconProbe, probeIcon);
+        passed = passed && probeIcon && probeIcon != filesIcon &&
+            (GetWindowLongPtrW(iconProbe, GWL_STYLE) & BS_ICON) &&
+            SendMessageW(iconProbe, BM_GETIMAGE, IMAGE_ICON, 0) == reinterpret_cast<LRESULT>(probeIcon);
+        setTaskIcon(iconProbe, nullptr);
+        passed = passed && !(GetWindowLongPtrW(iconProbe, GWL_STYLE) & BS_ICON) &&
+            !SendMessageW(iconProbe, BM_GETIMAGE, IMAGE_ICON, 0);
+        SendMessageW(iconProbe, WM_SETICON, ICON_SMALL, 0);
+        DestroyWindow(iconProbe);
         MONITORINFO during{}; during.cbSize = sizeof(during);
         GetMonitorInfoW(MonitorFromWindow(bar, MONITOR_DEFAULTTOPRIMARY), &during);
         passed = passed && during.rcWork.bottom <= rect.top && EqualRect(&backgroundRect, &during.rcWork);

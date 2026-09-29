@@ -17,7 +17,7 @@ wxString kind(const Entry& entry) {
     return ext.empty() ? "File" : ext.Mid(1) + " file";
 }
 wxString dateOf(const Entry& entry) {
-    if (entry.modified == fs::file_time_type{}) return "—";
+    if (entry.modified == fs::file_time_type{}) return wxS("\u2014");
     auto time = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
         entry.modified - fs::file_time_type::clock::now() + std::chrono::system_clock::now());
     return wxDateTime(std::chrono::system_clock::to_time_t(time)).Format("%d %b %Y, %H:%M");
@@ -155,7 +155,7 @@ void ExplorerFrame::scan() {
     const auto hidden = showHidden;
     list->DeleteAllItems(); entries.clear(); empty->Hide();
     selection->SetLabel("Select a file or folder\nto view its details.");
-    SetStatusText(query.empty() ? "Loading folder…" : "Searching… Press Esc to stop.", 0);
+    SetStatusText(query.empty() ? wxS("Loading folder\u2026") : wxS("Searching\u2026 Press Esc to stop."), 0);
     heading->SetLabel(query.empty() ? (current.filename().empty() ? text(current) : text(current.filename())) : "Search results");
     body->Layout();
     worker = std::thread([this, root, term, hidden, ticket] {
@@ -171,7 +171,7 @@ void ExplorerFrame::breadcrumbs() {
     crumbSizer->Clear(true);
     fs::path part = current.root_path();
     auto add = [this](const fs::path& p, const wxString& label) {
-        wxString caption = label.length() > 24 ? label.Left(21) + "…" : label;
+        wxString caption = label.length() > 24 ? label.Left(21) + wxS("\u2026") : label;
         caption.Replace("&", "&&");
         auto* b = new wxButton(crumbs, wxID_ANY, caption, wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT | wxBORDER_NONE);
         b->SetToolTip(text(p)); b->Bind(wxEVT_BUTTON, [this, p](wxCommandEvent&) { navigate(p); });
@@ -182,7 +182,7 @@ void ExplorerFrame::breadcrumbs() {
     for (const auto& p : current.relative_path()) { part /= p; parts.push_back(part); }
     // Keep the breadcrumb usable for deeply nested paths; the address always shows the full path.
     if (parts.size() > 4) {
-        add(parts[parts.size() - 5], "…");
+        add(parts[parts.size() - 5], wxS("\u2026"));
         parts.erase(parts.begin(), parts.end() - 4);
     }
     for (const auto& p : parts) {
@@ -205,7 +205,7 @@ void ExplorerFrame::navigate(fs::path target, bool record) {
         history.push_back(current); historyIndex = history.size() - 1;
     }
     query.clear(); search->ChangeValue(""); address->ChangeValue(text(current));
-    SetTitle((current.filename().empty() ? text(current) : text(current.filename())) + " — Explorer");
+    SetTitle((current.filename().empty() ? text(current) : text(current.filename())) + wxS(" \u2014 Explorer"));
     breadcrumbs(); updateNavigation(); scan();
     SetStatusText(text(current), 1);
 }
@@ -230,7 +230,7 @@ void ExplorerFrame::properties() {
     auto* entry = selectedEntry();
     if (!entry) return;
     wxMessageBox("Name: " + text(entry->path.filename()) + "\n\nType: " + kind(*entry) +
-                 "\nSize: " + (entry->directory ? "—" : humanSize(entry->size)) +
+                 "\nSize: " + (entry->directory ? wxS("\u2014") : humanSize(entry->size)) +
                  "\nModified: " + dateOf(*entry) + "\n\nLocation: " + text(entry->path),
                  "Properties", wxOK | wxICON_INFORMATION, this);
 }
@@ -468,7 +468,7 @@ ExplorerFrame::ExplorerFrame(const fs::path& initial) : wxFrame(nullptr, wxID_AN
     address = new wxTextCtrl(root, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, wxTE_PROCESS_ENTER);
     addressRow->Add(address, 1, wxRIGHT, 10);
     search = new wxSearchCtrl(root, wxID_ANY, "", wxDefaultPosition, wxSize(245, -1), wxTE_PROCESS_ENTER);
-    search->SetDescriptiveText("Search this folder…"); search->ShowCancelButton(true);
+    search->SetDescriptiveText(wxS("Search this folder\u2026")); search->ShowCancelButton(true);
     addressRow->Add(search, 0, wxEXPAND);
     layout->Add(addressRow, 0, wxEXPAND | wxALL, 10);
     crumbs = new wxPanel(root); crumbSizer = new wxBoxSizer(wxHORIZONTAL); crumbs->SetSizer(crumbSizer);
