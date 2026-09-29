@@ -2,6 +2,15 @@
 
 A native C++17 / wxWidgets file browser inspired by Windows XP Explorer, with a cleaner, resizable layout. Runs against your real filesystem; files open with the default desktop application.
 
+## Windows release 1.2.0
+
+The Windows ZIP now contains one `search.exe` with the browser, taskbar companion,
+non-interactive background, shortcut launcher and notification-area client icon.
+Run it normally for the taskbar/background, or use `search.exe --browser` for a
+file window. The taskbar's Files button starts browser mode from the same binary.
+A folder argument also opens browser mode. Linux keeps its existing browser-only
+startup. Full Explorer replacement and third-party tray hosting remain pending.
+
 ## Features
 
 - Back / Forward history, Up, Home, Refresh, editable address bar and clickable breadcrumbs.
@@ -43,7 +52,7 @@ sudo apt install g++-mingw-w64-x86-64-posix cmake make curl bzip2
 ./bw.sh
 ```
 
-The result is **`build_windows/search.exe`**, a 64-bit Windows application. The first build downloads checksum-verified wxWidgets 3.2.8 sources and builds a static Windows SDK locally under `build_windows/`; later builds reuse it. No system wxWidgets installation for Windows is needed. The script uses four build jobs by default (`JOBS=2 ./bw.sh` uses two). From a Flatpak IDE it runs the build on the Linux host.
+The result is **`build_windows/search.exe`**, a 64-bit Windows application containing both browser and companion modes. The Windows wrapper enables the shell code by default; pass `-DEXPLORER_WINDOWS_SHELL=OFF` for a browser-only build. The first build downloads checksum-verified wxWidgets 3.2.8 sources and builds a static Windows SDK locally under `build_windows/`; later builds reuse it. No system wxWidgets installation for Windows is needed. The script uses four build jobs by default (`JOBS=2 ./bw.sh` uses two). From a Flatpak IDE it runs the build on the Linux host.
 
 The executable statically links wxWidgets and the compiler runtime; Windows system DLLs are still required. Override `WX_CONFIG` to use an existing Windows wxWidgets SDK, or `CC` / `CXX` for alternate MinGW compilers. Native Windows execution must be tested separately. `bw.sh` now configures the shared CMake targets in `build_windows/cmake` and copies the browser executable to the existing output path. Extra arguments are forwarded to CMake; cross-compiled tests are disabled by default.
 
@@ -69,7 +78,7 @@ The executable statically links wxWidgets and the compiler runtime; Windows syst
 
 `./b.sh` also runs the filesystem tests. They cover shallow listing, recursive matching, hidden trees, metadata, cancellation, invalid paths, name validation and symlink cycles where supported.
 
-This is a focused file browser, not a replacement for the Windows shell. Network discovery, thumbnails and shell extensions are not implemented. Hidden-file filtering currently follows dotfile naming, rather than the Windows hidden attribute. Shortcuts use standard English home subdirectories when they exist. Native widgets follow the host theme, so the appearance varies between operating systems.
+The browser and optional companion are not yet a replacement for the Windows shell. Network discovery, thumbnails and shell extensions are not implemented. Hidden-file filtering currently follows dotfile naming, rather than the Windows hidden attribute. Shortcuts use standard English home subdirectories when they exist. Native widgets follow the host theme, so the appearance varies between operating systems.
 
 Optional native GUI smoke checks (run in a desktop session):
 
@@ -97,6 +106,25 @@ behavior. Linux build commands and application behavior are preserved.
 
 The [Windows shell plan](docs/windows-shell-plan.md) describes subsequent native
 integration and an optional, separate desktop shell. The browser/build extraction
-is implemented; desktop, taskbar, launcher, tray hosting and shell activation are
-still pending. See the [compatibility checklist](docs/windows-compatibility.md)
+is implemented. An optional Windows taskbar companion now provides window
+switching, a Start-menu shortcut launcher, a desktop icon preview and its own
+notification-area icon. It also displays a non-interactive blue desktop background,
+which can be toggled from its menu. Build it with `./bw.sh -DEXPLORER_WINDOWS_SHELL=ON` and see
+[taskbar controls and limitations](docs/windows-taskbar.md). Full desktop
+replacement, third-party tray hosting and shell activation remain pending. See the [compatibility checklist](docs/windows-compatibility.md)
 for the native Windows validation required before shell replacement.
+
+## Package releases
+
+After successful builds, generate verified ZIPs using the version in CMake:
+
+```sh
+./b.sh -DCMAKE_BUILD_TYPE=Release
+./bw.sh
+python3 package_release.py
+```
+
+The packager requires the integrated Windows build and produces Linux and Windows
+archives under `release/`, with documentation and refreshed `SHA256SUMS`. Existing
+versioned releases are retained. The Windows archive contains only one executable,
+`search.exe`. Native Windows runtime testing is still required.

@@ -39,3 +39,36 @@ Windows edition/build, architecture, display scaling and account type with resul
 Replacement mode must remain unavailable until mandatory compatibility and
 recovery gates pass. Browser development can continue independently. A future
 companion preview must not silently change the user's configured shell.
+
+## Taskbar companion implementation
+
+The optional companion is now implemented and cross-compiles. Its portable
+window-filter and DPI/overflow layout tests pass on Linux. This adds a primary
+monitor appbar, running-window controls, a Start-menu shortcut launcher, a
+windowed desktop icon preview and a notification-area client icon. It does not
+host third-party notification icons or replace the desktop shell.
+
+Native runtime checks remain pending, including the new `--smoke-test` lifecycle
+check. Follow [the taskbar validation procedure](windows-taskbar.md) before
+marking any native compatibility gate passed. Explorer restart registration is
+implemented but untested; automatic restart after a companion crash is not.
+
+## Non-interactive background
+
+The companion now has a primary-monitor blue gradient background, visible by
+default and toggled from its menu. Its code uses a non-activating tool window,
+ignores clicks and context menus, follows the work area and destroys the surface
+on exit. The native smoke check now covers focus preservation, bounds, input
+suppression, toggling, task-list exclusion and destruction. These native checks
+are compiled but have not been executed here. Explorer host layering and Win+D
+remain manual checks; existing wallpaper settings are not modified.
+
+## Integrated executable and release 1.2.0
+
+One Windows `search.exe` contains the browser, taskbar, background, shortcut
+launcher and tray client. Files launches the same executable with `--browser`.
+The native shell smoke check also launches `--browser-smoke-test`, waits for a
+successful browser process exit and checks that the shell stays alive. That
+native check is cross-compiled but has not been executed in this workspace.
+Versioned ZIPs now have a repeatable packager that verifies archived binary bytes
+and regenerates checksums. Linux still starts directly in browser mode.

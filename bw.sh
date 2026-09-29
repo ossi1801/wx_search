@@ -53,7 +53,7 @@ CC="$CC" CXX="$CXX" cmake -S . -B "$output/cmake" -G "Unix Makefiles" \
     -DwxWidgets_CONFIG_EXECUTABLE="$WX_CONFIG" \
     -DwxWidgets_USE_STATIC=ON -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_EXE_LINKER_FLAGS="-static -static-libgcc -static-libstdc++" \
-    -DBUILD_TESTING=OFF "$@"
+    -DBUILD_TESTING=OFF -DEXPLORER_WINDOWS_SHELL=ON "$@"
 cmake --build "$output/cmake" --parallel "$JOBS"
 cp "$output/cmake/searchwx.exe" "$output/search.exe"
 printf '\nWindows executable: %s/search.exe\n' "$output"
