@@ -16,6 +16,7 @@
 #include <set>
 #include "taskbar_model.h"
 #include "background.h"
+#include "spotlight.h"
 
 namespace fs = std::filesystem;
 namespace {
@@ -850,13 +851,14 @@ LRESULT CALLBACK barProc(HWND window, UINT message, WPARAM w, LPARAM l) {
         return 0;
     }
     case WM_CONTEXTMENU: menu(false); return 0;
-    case WM_HOTKEY: priorForeground = GetForegroundWindow(); SetForegroundWindow(bar); SetFocus(startButton); return 0;
+    case WM_HOTKEY: if (w == 2) { explorer::spotlight::toggle(); return 0; } priorForeground = GetForegroundWindow(); SetForegroundWindow(bar); SetFocus(startButton); return 0;
     case TrayMessage:
         if (l == WM_RBUTTONUP || l == WM_CONTEXTMENU) menu(false);
         else if (l == WM_LBUTTONDBLCLK) openBrowser();
         return 0;
     case WM_CLOSE: DestroyWindow(window); return 0;
     case WM_DESTROY: {
+        explorer::spotlight::destroy();
         KillTimer(window, 1); KillTimer(window, 2); UnregisterHotKey(window, 1); tray(true);
         if (registered) { APPBARDATA data{}; data.cbSize = sizeof(data); data.hWnd = window; SHAppBarMessage(ABM_REMOVE, &data); registered = false; }
         if (manualWorkArea) {
@@ -939,6 +941,8 @@ int runWindowsShell(HINSTANCE instance, bool smokeTest) {
     clockButton = makeButton(Clock, L"Clock");
     SetWindowLongPtrW(clockButton, GWL_STYLE, GetWindowLongPtrW(clockButton, GWL_STYLE) | BS_MULTILINE);
     tray(); refreshTasks(); ShowWindow(bar, SW_SHOWNOACTIVATE);
+    if (!explorer::spotlight::create(instance, bar, dpi) && !smokeTest)
+        MessageBoxW(bar, L"Search could not start. Alt+Space may already be registered by another application.", L"Search", MB_OK | MB_ICONWARNING);
     if (smokeTest) {
         RECT rect{}; GetWindowRect(bar, &rect);
         HWND background = explorer::background::handle();

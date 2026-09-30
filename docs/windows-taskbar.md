@@ -209,3 +209,23 @@ auto-arrange in columns on the background surface. Other
 applications' tray icons, system flyouts and notification history are unavailable
 while Explorer is stopped. Session startup and crash recovery still require
 the compatibility work in [the shell plan](windows-shell-plan.md).
+
+## Spotlight search
+
+Press **Alt+Space** while the companion is running to toggle Search. The dark,
+DPI-scaled overlay appears on the pointer's monitor. Type to search, use Up/Down
+to select a result and Enter to open it; clicking a row also opens it. Escape or
+switching to another window dismisses the overlay. An empty query lists apps.
+
+Search indexes shortcuts in both Start Menu Programs folders and files in
+Desktop, Documents, Downloads, Pictures, Music and Videos. Matching ignores case
+and supports multiple words across filenames and paths. Exact names and prefixes
+rank above substring and folder matches; apps win otherwise equivalent matches.
+Scanning and ranking run on background threads, typing is debounced by 45 ms,
+and only the best eight results are sent to the UI. Inaccessible folders are
+skipped, directory symlinks are not followed, and scanning is bounded to 50,000
+entries per root and twelve directory levels. The index is held in memory for
+the companion session; restart the companion to include newly created files.
+This is not a whole-drive or file-content search. If another application has
+registered Alt+Space, startup reports the conflict. Ctrl+Alt+Space still focuses
+the taskbar Start button.

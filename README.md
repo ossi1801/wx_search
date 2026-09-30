@@ -16,6 +16,7 @@ startup. Full Explorer replacement and third-party tray hosting remain pending.
 - Back / Forward history, Up, Home, Refresh, editable address bar and clickable breadcrumbs.
 - XP-inspired blue sidebar with home locations and selected-item details.
 - Details and large-icon views; click a details column to sort. Folders stay first.
+- Windows companion Spotlight: **Alt+Space** opens a dark search overlay for Start Menu apps and files in common user folders, with background indexing, ranked results and keyboard navigation. See [search coverage and controls](docs/windows-taskbar.md#spotlight-search).
 - Recursive, case-insensitive filename search within the current folder. Press Enter or click the search icon to search; Escape or the clear button returns to the folder.
 - Search runs on a background thread, skips inaccessible subdirectories and does not follow directory symlinks. Results are capped at 50,000 matches.
 - Copy, cut and paste files/folders through the Edit menu, toolbar, right-click menu or Ctrl+C/X/V. Ctrl/Shift-click selects multiple items. Paste targets the current folder; existing names are rejected without overwriting. Cut moves items when pasted within this window. Native file clipboard data also supports copying to/from other applications.
