@@ -42,12 +42,16 @@ bool manualWorkArea = false;
 RECT savedWorkArea{};
 struct MenuIcon { HBITMAP bitmap{}; fs::file_time_type modified{}; };
 std::map<fs::path, MenuIcon> menuIcons;
+std::map<int, HBITMAP> commandIcons;
 
 void clearMenuIcons() {
     for (const auto& entry : menuIcons) if (entry.second.bitmap) DeleteObject(entry.second.bitmap);
     menuIcons.clear();
+    for (const auto& entry : commandIcons) DeleteObject(entry.second);
+    commandIcons.clear();
 }
 
+HBITMAP iconBitmap(HICON icon);
 HBITMAP applicationIcon(const fs::path& path) {
     std::error_code ec;
     const auto modified = fs::last_write_time(path, ec);
@@ -60,6 +64,11 @@ HBITMAP applicationIcon(const fs::path& path) {
     HICON icon = info.hIcon;
     if (!icon) icon = CopyIcon(LoadIconW(nullptr, IDI_APPLICATION));
     if (!icon) return nullptr;
+    cached.bitmap = iconBitmap(icon);
+    return cached.bitmap;
+}
+
+HBITMAP iconBitmap(HICON icon) {
     const int size = MulDiv(16, dpi, 96);
     BITMAPINFO dib{}; dib.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
     dib.bmiHeader.biWidth = size; dib.bmiHeader.biHeight = -size;
@@ -90,19 +99,78 @@ HBITMAP applicationIcon(const fs::path& path) {
             }
         }
         SelectObject(dc, old);
-        cached.bitmap = bitmap;
-    } else if (bitmap) DeleteObject(bitmap);
+    } else if (bitmap) { DeleteObject(bitmap); bitmap = nullptr; }
     if (dc) DeleteDC(dc);
     DestroyIcon(icon);
-    return cached.bitmap;
+    return bitmap;
+}
+
+HBITMAP commandIcon(int kind) {
+    auto& bitmap = commandIcons[kind];
+    if (bitmap) return bitmap;
+    if (kind == Shutdown || kind == Restart || kind == 203) {
+        const int size = MulDiv(16, dpi, 96);
+        BITMAPINFO dib{}; dib.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        dib.bmiHeader.biWidth = size; dib.bmiHeader.biHeight = -size;
+        dib.bmiHeader.biPlanes = 1; dib.bmiHeader.biBitCount = 32;
+        DWORD* pixels{};
+        HDC dc = CreateCompatibleDC(nullptr);
+        bitmap = CreateDIBSection(dc, &dib, DIB_RGB_COLORS, reinterpret_cast<void**>(&pixels), nullptr, 0);
+        if (!dc || !bitmap) { if (dc) DeleteDC(dc); if (bitmap) DeleteObject(bitmap); bitmap = nullptr; return nullptr; }
+        auto old = SelectObject(dc, bitmap);
+        std::fill(pixels, pixels + size * size, 0);
+        HPEN pen = CreatePen(PS_SOLID, std::max(1, size / 8), RGB(50, 80, 110));
+        auto oldPen = SelectObject(dc, pen);
+        auto oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+        const int edge = std::max(2, size / 5);
+        if (kind == Restart) {
+            Arc(dc, edge, edge, size-edge, size-edge, size/2, edge, size-edge, size/2);
+            MoveToEx(dc, size-edge, edge, nullptr); LineTo(dc, size-edge, size/2); LineTo(dc, size/2, size/2);
+        } else {
+            Arc(dc, edge, edge, size-edge, size-edge, size/2-edge/2, edge, size/2+edge/2, edge);
+            MoveToEx(dc, size/2, 1, nullptr); LineTo(dc, size/2, size/2);
+        }
+        GdiFlush();
+        for (int i = 0; i < size * size; ++i) if (pixels[i] & 0x00ffffff) pixels[i] |= 0xff000000;
+        SelectObject(dc, oldBrush); SelectObject(dc, oldPen); SelectObject(dc, old);
+        DeleteObject(pen); DeleteDC(dc);
+        return bitmap;
+    }
+    SHSTOCKICONID stockId = SIID_APPLICATION;
+    if (kind == Files || kind == BackgroundFolder) stockId = SIID_FOLDER;
+    else if (kind == Desktop || kind == Background || kind == 201) stockId = SIID_DESKTOPPC;
+    else if (kind == 105 || kind == 202) stockId = SIID_SHIELD;
+    else if (kind == 106) stockId = SIID_DRIVEFIXED;
+    else if (kind == Exit) stockId = SIID_DELETE;
+    SHSTOCKICONINFO stock{}; stock.cbSize = sizeof(stock);
+    HICON icon{};
+    if (SUCCEEDED(SHGetStockIconInfo(stockId, SHGSI_ICON | SHGSI_SMALLICON, &stock))) icon = stock.hIcon;
+    if (!icon) icon = CopyIcon(LoadIconW(nullptr, IDI_APPLICATION));
+    if (icon) bitmap = iconBitmap(icon);
+    return bitmap;
 }
 
 void populateMenuIcons(HMENU popup) {
     for (int i = 0; i < GetMenuItemCount(popup); ++i) {
-        const UINT id = GetMenuItemID(popup, i);
-        if (id < AppFirst || id >= AppFirst + apps.size()) continue;
-        MENUITEMINFOW item{}; item.cbSize = sizeof(item); item.fMask = MIIM_BITMAP;
-        item.hbmpItem = applicationIcon(apps[id - AppFirst].path);
+        wchar_t label[64]{};
+        MENUITEMINFOW item{}; item.cbSize = sizeof(item);
+        item.fMask = MIIM_ID | MIIM_FTYPE | MIIM_SUBMENU | MIIM_STRING;
+        item.dwTypeData = label; item.cch = 64;
+        if (!GetMenuItemInfoW(popup, i, TRUE, &item) || (item.fType & MFT_SEPARATOR)) continue;
+        HBITMAP bitmap{};
+        if (!item.hSubMenu && item.wID >= AppFirst && item.wID < AppFirst + apps.size())
+            bitmap = applicationIcon(apps[item.wID - AppFirst].path);
+        else {
+            int kind = static_cast<int>(item.wID);
+            if (item.hSubMenu) {
+                kind = 200;
+                if (std::wstring(label) == L"Desktop") kind = 201;
+                else if (std::wstring(label) == L"System") kind = 202;
+                else if (std::wstring(label) == L"Power") kind = 203;
+            }
+            bitmap = commandIcon(kind);
+        }
+        item.fMask = MIIM_BITMAP; item.hbmpItem = bitmap;
         SetMenuItemInfoW(popup, i, TRUE, &item);
     }
 }
@@ -916,6 +984,16 @@ int runWindowsShell(HINSTANCE instance, bool smokeTest) {
             GetObjectW(iconItem.hbmpItem, sizeof(bitmap), &bitmap) &&
             bitmap.bmWidth == MulDiv(16, dpi, 96) && bitmap.bmHeight == MulDiv(16, dpi, 96) &&
             applicationIcon(fs::path(module)) == iconItem.hbmpItem && passed;
+        AppendMenuW(iconMenu, MF_STRING, Files, L"Files");
+        AppendMenuW(iconMenu, MF_STRING, Shutdown, L"Shut down");
+        AppendMenuW(iconMenu, MF_STRING, Restart, L"Restart");
+        HMENU category = CreatePopupMenu();
+        AppendMenuW(iconMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(category), L"Power");
+        populateMenuIcons(iconMenu);
+        for (int i = 1; i < GetMenuItemCount(iconMenu); ++i) {
+            iconItem.hbmpItem = nullptr;
+            passed = GetMenuItemInfoW(iconMenu, i, TRUE, &iconItem) && iconItem.hbmpItem && passed;
+        }
         DestroyMenu(iconMenu);
         apps.clear();
         passed = smokeBrowserProcess() && passed;

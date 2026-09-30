@@ -1,7 +1,6 @@
 #include "explorer_frame.h"
 #include "archives.h"
-#include <wx/filedlg.h>
-#include <wx/dirdlg.h>
+#include <wx/textdlg.h>
 #ifdef __WXMSW__
 #include <wx/msw/wrapwin.h>
 #endif
@@ -401,15 +400,19 @@ void ExplorerFrame::archiveSelected(bool extract) {
     fs::path destination;
     if (extract) {
         if (paths.size() != 1 || explorer::lower(paths.front().extension().u8string()) != ".zip") return;
-        wxDirDialog dialog(this, "Extract ZIP into a new folder", text(paths.front().parent_path() / paths.front().stem()));
+        wxTextEntryDialog dialog(this, "Extract into this new folder (must not already exist):",
+                                 "Extract ZIP", text(paths.front().parent_path() / paths.front().stem()));
         if (dialog.ShowModal() != wxID_OK) return;
-        destination = pathOf(dialog.GetPath());
+        if (dialog.GetValue().empty()) { error("Enter a destination folder."); return; }
+        destination = pathOf(dialog.GetValue());
+        if (destination.is_relative()) destination = current / destination;
     } else {
-        wxFileDialog dialog(this, "Compress to ZIP", text(current),
-                            text(paths.size() == 1 ? paths.front().filename() : fs::path("Archive")) + ".zip",
-                            "ZIP archives (*.zip)|*.zip", wxFD_SAVE);
+        wxTextEntryDialog dialog(this, "Create this ZIP file (must not already exist):", "Compress to ZIP",
+                                 text(current / (paths.size() == 1 ? paths.front().filename() : fs::path("Archive"))) + ".zip");
         if (dialog.ShowModal() != wxID_OK) return;
-        destination = pathOf(dialog.GetPath());
+        if (dialog.GetValue().empty()) { error("Enter an archive filename."); return; }
+        destination = pathOf(dialog.GetValue());
+        if (destination.is_relative()) destination = current / destination;
         if (explorer::lower(destination.extension().u8string()) != ".zip") destination += ".zip";
     }
     try {

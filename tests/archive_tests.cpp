@@ -18,12 +18,17 @@ int main() {
         fs::create_directories(root / "folder" / "empty");
         std::ofstream(root / "folder" / "résumé.txt") << "hello";
         std::ofstream(root / "other.txt") << "world";
+        std::ofstream(root / "folder" / "zero.txt");
         explorer::createZip({root / "folder", root / "other.txt"}, root / "bundle.zip");
         explorer::extractZip(root / "bundle.zip", root / "out");
         check(fs::is_directory(root / "out" / "folder" / "empty"), "Empty folder preserved");
         check(fs::file_size(root / "out" / "folder" / "résumé.txt") == 5, "Unicode file preserved");
         std::string content; std::ifstream(root / "out" / "other.txt") >> content;
         check(content == "world", "File content preserved");
+        check(fs::file_size(root / "out" / "folder" / "zero.txt") == 0, "Empty file preserved");
+        explorer::extractZip(root / "bundle.zip", root / "new-parent" / "nested-out");
+        check(fs::file_size(root / "new-parent" / "nested-out" / "other.txt") == 5,
+              "New destination parents created");
         rejects([&] { explorer::createZip({root / "folder"}, root / "bundle.zip"); });
         rejects([&] { explorer::createZip({root / "folder"}, root / "folder" / "self.zip"); });
         rejects([&] { explorer::extractZip(root / "bundle.zip", root / "out"); });

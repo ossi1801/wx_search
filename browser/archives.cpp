@@ -94,7 +94,7 @@ void extractZip(const fs::path& source, const fs::path& destination, ArchiveProg
     wxFFileInputStream file(stringOf(source));
     require(file.IsOk(), "Cannot read ZIP archive.");
     wxZipInputStream zip(file);
-    require(fs::create_directory(destination), "Cannot create destination folder.");
+    require(fs::create_directories(destination), "Cannot create destination folder.");
     try {
         while (std::unique_ptr<wxZipEntry> entry{zip.GetNextEntry()}) {
             auto relative = safeEntry(entry->GetName());
