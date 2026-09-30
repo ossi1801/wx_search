@@ -60,7 +60,7 @@ startup behavior and do not compile the Windows shell sources.
 
 ```text
 +-----------------------------------------------------------------------+
-| Windows icon | Folder icon | App window | App window | ... | All | Local time       |
+| Windows icon | Folder icon | App window | App window | ... | Window grid | Time / date       |
 +-----------------------------------------------------------------------+
 ```
 
@@ -77,20 +77,24 @@ startup behavior and do not compile the Windows shell sources.
   may reject commands from a non-elevated companion.
 - **All** lists every tracked window when the taskbar is crowded.
 - The **Start** taskbar button shows a blue Windows-style icon; **Files** shows
-  the standard Windows folder icon. Both scale with system DPI, keep accessible
-  names and show their labels as tooltips. **All** and the clock retain text.
+  the standard Windows folder icon. The **All windows** button shows an outlined window-grid icon. All three scale
+  with system DPI, keep accessible names and show their labels as tooltips.
+  The clock shows local 24-hour `HH:mm` time above the date in `DD.MM.YYYY` format.
 - **Files** launches this project's file browser.
-- **Start > Programs** lists user and public Start-menu shortcuts, grouped into
-  pages. Each entry shows its shortcut's application icon, with a generic icon
+- **Start > Applications** lists user and public Start-menu shortcuts, grouped by
+  initial letter (with numbers and symbols under #). Each entry shows its shortcut's application icon, with a generic icon
   when extraction fails. Icons scale with the system DPI, load when their submenu
   opens, and remain cached until the shortcut changes or disappears. The catalog
   refreshes on opening Start and is capped at 2,000 items.
-- **Open background folder** opens `%LOCALAPPDATA%\Rexplorer\Backgrounds`
+- **Start > System** contains Windows Settings and Task Manager.
+- **Start > Power** offers Shut down and Restart, each with a confirmation
+  defaulting to Cancel/No. Windows handles the operation without forced app closure.
+- **Start > Desktop > Background folder** opens `%LOCALAPPDATA%\Rexplorer\Backgrounds`
   in this application's file browser. The folder is created automatically. Put a
   PNG, JPG/JPEG or BMP image directly in it; subfolders are ignored. With multiple
   images, the first filename in ordinal alphabetical order is selected (extension
   matching is case-insensitive). Use a single image to make the choice explicit.
-- **Desktop background** in Start or the companion's context menu toggles the
+- **Desktop > Show background** in Start or the companion's context menu toggles the
   background covering the primary monitor's work area, excluding the taskbar.
   The selected image is stretched to fill that area, including aspect-ratio
   distortion, and resizes after resolution/work-area changes. Missing, unreadable

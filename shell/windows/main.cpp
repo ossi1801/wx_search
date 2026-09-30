@@ -20,7 +20,7 @@
 namespace fs = std::filesystem;
 namespace {
 constexpr UINT AppbarMessage = WM_APP + 1, TrayMessage = WM_APP + 2;
-constexpr int Start = 100, Files = 101, Desktop = 102, More = 103, Exit = 104, Clock = 107, Background = 108, BackgroundFolder = 109;
+constexpr int Start = 100, Files = 101, Desktop = 102, More = 103, Exit = 104, Clock = 107, Background = 108, BackgroundFolder = 109, Shutdown = 110, Restart = 111;
 constexpr int AppFirst = 1000, WindowFirst = 10000;
 struct Item { std::wstring label; fs::path path; };
 struct Task { HWND window; std::wstring title; };
@@ -30,7 +30,7 @@ std::vector<Item> apps, desktopItems;
 bool registered = false, positioning = false, fullscreen = false;
 std::vector<HWND> taskButtons;
 HWND startButton{}, filesButton{}, moreButton{}, clockButton{};
-HICON startIcon{}, filesIcon{};
+HICON startIcon{}, filesIcon{}, moreIcon{};
 HWND taskTips{};
 void layoutButtons();
 UINT taskbarCreated{};
@@ -381,11 +381,12 @@ std::wstring menuLabel(std::wstring label) {
 void showDesktop();
 void menu(bool launcher) {
     HMENU popup = CreatePopupMenu();
-    AppendMenuW(popup, MF_STRING, Files, L"Open file browser");
-    AppendMenuW(popup, MF_STRING, Desktop, L"Refresh desktop icons");
-    AppendMenuW(popup, MF_STRING | (explorer::background::visible() ? MF_CHECKED : MF_UNCHECKED),
-        Background, L"Desktop background");
-    AppendMenuW(popup, MF_STRING, BackgroundFolder, L"Open background folder");
+    AppendMenuW(popup, MF_STRING, Files, L"File browser");
+    HMENU desktopMenu = CreatePopupMenu();
+    AppendMenuW(desktopMenu, MF_STRING, Desktop, L"Refresh icons");
+    AppendMenuW(desktopMenu, MF_STRING | (explorer::background::visible() ? MF_CHECKED : MF_UNCHECKED),
+        Background, L"Show background");
+    AppendMenuW(desktopMenu, MF_STRING, BackgroundFolder, L"Background folder");
     if (launcher) {
         apps.clear();
         readItems(knownFolder(FOLDERID_Programs), true, apps);
@@ -399,19 +400,32 @@ void menu(bool launcher) {
             } else ++it;
         }
         HMENU programs = CreatePopupMenu();
-        // Paginate the catalog so large installations remain navigable.
-        for (size_t offset = 0; offset < apps.size(); offset += 30) {
-            HMENU page = CreatePopupMenu();
-            for (size_t i = offset; i < std::min(offset + 30, apps.size()); ++i)
-                AppendMenuW(page, MF_STRING, AppFirst + i, menuLabel(apps[i].label).c_str());
-            auto label = apps[offset].label + L" … " + apps[std::min(offset + 29, apps.size() - 1)].label;
-            AppendMenuW(programs, MF_POPUP, reinterpret_cast<UINT_PTR>(page), menuLabel(label).c_str());
+        // Alphabetical groups give shortcuts a predictable place in the catalog.
+        std::map<wchar_t, HMENU> groups;
+        for (size_t i = 0; i < apps.size(); ++i) {
+            wchar_t initial = apps[i].label.empty() ? L'#' : std::towupper(apps[i].label.front());
+            if (initial < L'A' || initial > L'Z') initial = L'#';
+            auto& group = groups[initial];
+            if (!group) group = CreatePopupMenu();
+            AppendMenuW(group, MF_STRING, AppFirst + i, menuLabel(apps[i].label).c_str());
+        }
+        for (const auto& group : groups) {
+            const std::wstring label(1, group.first);
+            AppendMenuW(programs, MF_POPUP, reinterpret_cast<UINT_PTR>(group.second), label.c_str());
         }
         if (apps.empty()) AppendMenuW(programs, MF_GRAYED, 0, L"No Start menu shortcuts found");
-        AppendMenuW(popup, MF_POPUP, reinterpret_cast<UINT_PTR>(programs), L"Programs");
-        AppendMenuW(popup, MF_STRING, 105, L"Windows Settings");
-        AppendMenuW(popup, MF_STRING, 106, L"Task Manager");
+        AppendMenuW(popup, MF_POPUP, reinterpret_cast<UINT_PTR>(programs), L"Applications");
     }
+    AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(popup, MF_POPUP, reinterpret_cast<UINT_PTR>(desktopMenu), L"Desktop");
+    HMENU system = CreatePopupMenu();
+    AppendMenuW(system, MF_STRING, 105, L"Windows Settings");
+    AppendMenuW(system, MF_STRING, 106, L"Task Manager");
+    AppendMenuW(popup, MF_POPUP, reinterpret_cast<UINT_PTR>(system), L"System");
+    HMENU power = CreatePopupMenu();
+    AppendMenuW(power, MF_STRING, Shutdown, L"Shut down…");
+    AppendMenuW(power, MF_STRING, Restart, L"Restart…");
+    AppendMenuW(popup, MF_POPUP, reinterpret_cast<UINT_PTR>(power), L"Power");
     AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(popup, MF_STRING, Exit, L"Exit companion");
     POINT point{}; GetCursorPos(&point);
@@ -431,6 +445,19 @@ void menu(bool launcher) {
         std::error_code ec;
         if (!folder.empty() && fs::is_directory(folder, ec)) openBrowser(folder);
         else MessageBoxW(bar, L"The background folder could not be created.", L"Explorer companion", MB_OK | MB_ICONERROR);
+    }
+    else if (command == Shutdown || command == Restart) {
+        const bool restart = command == Restart;
+        if (MessageBoxW(bar, restart ? L"Restart this computer now? Save your work before continuing." :
+            L"Shut down this computer now? Save your work before continuing.",
+            restart ? L"Restart" : L"Shut down", MB_YESNO | MB_DEFBUTTON2 | MB_ICONQUESTION) == IDYES) {
+            wchar_t systemPath[MAX_PATH]{}; GetSystemDirectoryW(systemPath, MAX_PATH);
+            const auto executable = fs::path(systemPath) / L"shutdown.exe";
+            auto result = ShellExecuteW(bar, L"open", executable.c_str(), restart ? L"/r /t 0" : L"/s /t 0",
+                nullptr, SW_HIDE);
+            if (reinterpret_cast<INT_PTR>(result) <= 32)
+                MessageBoxW(bar, L"Windows could not start the power action.", L"Power", MB_OK | MB_ICONERROR);
+        }
     }
     else if (command == Exit) DestroyWindow(bar);
     else if (command == 105) launch(L"ms-settings:");
@@ -518,7 +545,7 @@ LRESULT CALLBACK taskButtonProc(HWND button, UINT message, WPARAM w, LPARAM l, U
     return DefSubclassProc(button, message, w, l);
 }
 
-HICON makeStartIcon(int size) {
+HICON makeStartIcon(int size, bool windows = false) {
     BITMAPINFO dib{}; dib.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
     dib.bmiHeader.biWidth = size; dib.bmiHeader.biHeight = -size;
     dib.bmiHeader.biPlanes = 1; dib.bmiHeader.biBitCount = 32;
@@ -531,11 +558,12 @@ HICON makeStartIcon(int size) {
     std::vector<BYTE> maskBits(stride * size, 0xff);
     const int margin = std::max(1, size / 12), gap = std::max(2, size / 12);
     const int pane = (size - 2 * margin - gap) / 2;
-    // Four blue panes form a Windows-style Start glyph at the current DPI.
+    // Four panes form the Start glyph or outlined window-grid glyph at the current DPI.
     for (int row = 0; row < 2; ++row) for (int column = 0; column < 2; ++column) {
         const int left = margin + column * (pane + gap), top = margin + row * (pane + gap);
         for (int y = top; y < top + pane; ++y) for (int x = left; x < left + pane; ++x) {
-            pixels[y * size + x] = 0xff0078d7;
+            if (!windows || x == left || x == left + pane - 1 || y == top || y == top + pane - 1 || y == top + 2)
+                pixels[y * size + x] = windows ? 0xff404040 : 0xff0078d7;
             maskBits[y * stride + x / 8] &= static_cast<BYTE>(~(0x80 >> (x % 8)));
         }
     }
@@ -550,6 +578,7 @@ HICON makeStartIcon(int size) {
 void setLauncherIcons() {
     const int size = MulDiv(24, dpi, 96);
     startIcon = makeStartIcon(size);
+    moreIcon = makeStartIcon(size, true);
     SHSTOCKICONINFO stock{}; stock.cbSize = sizeof(stock);
     if (SUCCEEDED(SHGetStockIconInfo(SIID_FOLDER, SHGSI_ICON | SHGSI_LARGEICON, &stock))) {
         filesIcon = static_cast<HICON>(CopyImage(stock.hIcon, IMAGE_ICON, size, size, 0));
@@ -576,6 +605,7 @@ void setLauncherIcons() {
     };
     attach(startButton, startIcon, L"Start");
     attach(filesButton, filesIcon, L"Files");
+    attach(moreButton, moreIcon, L"All windows");
 }
 
 HWND makeButton(int id, const wchar_t* title, bool task = false) {
@@ -660,8 +690,11 @@ void layoutButtons() {
         MoveWindow(taskButtons[i], layout.taskLeft() + static_cast<int>(i) * buttonWidth, 0, buttonWidth, height, TRUE);
         ShowWindow(taskButtons[i], SW_SHOWNOACTIVATE);
     }
-    wchar_t time[32]{}; GetTimeFormatW(LOCALE_USER_DEFAULT, TIME_NOSECONDS, nullptr, nullptr, time, 32);
-    SetWindowTextW(clockButton, time);
+    SYSTEMTIME now{}; GetLocalTime(&now);
+    wchar_t dateTime[48]{};
+    swprintf(dateTime, 48, L"%02u:%02u\n%02u.%02u.%04u",
+        now.wHour, now.wMinute, now.wDay, now.wMonth, now.wYear);
+    SetWindowTextW(clockButton, dateTime);
 }
 
 void windowMenu() {
@@ -764,9 +797,11 @@ LRESULT CALLBACK barProc(HWND window, UINT message, WPARAM w, LPARAM l) {
         }
         SendMessageW(startButton, BM_SETIMAGE, IMAGE_ICON, 0);
         SendMessageW(filesButton, BM_SETIMAGE, IMAGE_ICON, 0);
+        SendMessageW(moreButton, BM_SETIMAGE, IMAGE_ICON, 0);
+        if (moreIcon) DestroyIcon(moreIcon);
         if (startIcon) DestroyIcon(startIcon);
         if (filesIcon) DestroyIcon(filesIcon);
-        startIcon = filesIcon = nullptr;
+        startIcon = filesIcon = moreIcon = nullptr;
         for (HWND button : taskButtons) setTaskIcon(button, nullptr);
         clearMenuIcons();
         explorer::background::destroy();
@@ -831,9 +866,10 @@ int runWindowsShell(HINSTANCE instance, bool smokeTest) {
         MessageBoxW(bar, L"The desktop background could not be created.", L"Explorer companion", MB_OK | MB_ICONERROR);
     startButton = makeButton(Start, L"Start");
     filesButton = makeButton(Files, L"Files");
+    moreButton = makeButton(More, L"All windows");
     setLauncherIcons();
-    moreButton = makeButton(More, L"All");
     clockButton = makeButton(Clock, L"Clock");
+    SetWindowLongPtrW(clockButton, GWL_STYLE, GetWindowLongPtrW(clockButton, GWL_STYLE) | BS_MULTILINE);
     tray(); refreshTasks(); ShowWindow(bar, SW_SHOWNOACTIVATE);
     if (smokeTest) {
         RECT rect{}; GetWindowRect(bar, &rect);
@@ -848,9 +884,11 @@ int runWindowsShell(HINSTANCE instance, bool smokeTest) {
         passed = passed && explorer::background::visible();
         passed = passed && (registered || manualWorkArea) && rect.bottom == originalMonitor.rcMonitor.bottom && startButton && filesButton && moreButton && clockButton &&
             IsWindowVisible(bar) && !isTask(bar) && rect.bottom > rect.top;
-        passed = passed && startIcon && filesIcon &&
+        passed = passed && startIcon && filesIcon && moreIcon &&
             SendMessageW(startButton, BM_GETIMAGE, IMAGE_ICON, 0) == reinterpret_cast<LRESULT>(startIcon) &&
-            SendMessageW(filesButton, BM_GETIMAGE, IMAGE_ICON, 0) == reinterpret_cast<LRESULT>(filesIcon);
+            SendMessageW(filesButton, BM_GETIMAGE, IMAGE_ICON, 0) == reinterpret_cast<LRESULT>(filesIcon) &&
+            SendMessageW(moreButton, BM_GETIMAGE, IMAGE_ICON, 0) == reinterpret_cast<LRESULT>(moreIcon) &&
+            (GetWindowLongPtrW(clockButton, GWL_STYLE) & BS_MULTILINE);
         HWND iconProbe = makeButton(WindowFirst - 1, L"Icon probe", true);
         SendMessageW(iconProbe, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(filesIcon));
         HICON probeIcon = taskIcon(iconProbe);

@@ -19,12 +19,12 @@ struct Layout {
 inline Layout layout(int width, unsigned dpi, size_t tasks) {
     width = std::max(0, width);
     auto scale = [dpi](int x) { return std::max(1, static_cast<int>(x * std::max(96u, dpi) / 96)); };
-    Layout result{scale(70), scale(70), scale(50), scale(80), 0, 0};
+    Layout result{scale(70), scale(70), scale(50), scale(100), 0, 0};
     const int fixed = result.start + result.files + result.more + result.clock;
     if (width < fixed) {
-        result.start = width * 70 / 270;
-        result.files = width * 70 / 270;
-        result.more = width * 50 / 270;
+        result.start = width * 70 / 290;
+        result.files = width * 70 / 290;
+        result.more = width * 50 / 290;
         result.clock = width - result.start - result.files - result.more;
         return result;
     }
