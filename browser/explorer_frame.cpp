@@ -2,6 +2,9 @@
 #include "archives.h"
 #include <wx/filedlg.h>
 #include <wx/dirdlg.h>
+#ifdef __WXMSW__
+#include <wx/msw/wrapwin.h>
+#endif
 
 wxString text(const fs::path& path) { return wxString::FromUTF8(path.u8string()); }
 fs::path pathOf(const wxString& value) { return fs::u8path(value.ToUTF8().data()); }
@@ -29,8 +32,16 @@ wxDEFINE_EVENT(EVT_SCAN_DONE, wxThreadEvent);
 
 wxButton* ExplorerFrame::button(wxWindow* parent, wxSizer* sizer, const wxString& label,
                  std::function<void()> action, const wxArtID& art) {
-    auto* b = new wxButton(parent, wxID_ANY, label, wxDefaultPosition, wxDefaultSize, wxBU_LEFT | wxBORDER_NONE);
-    if (!art.empty()) b->SetBitmap(wxArtProvider::GetBitmap(art, wxART_BUTTON, wxSize(16, 16)));
+    long style = wxBU_LEFT;
+#ifndef __WXMSW__
+    style |= wxBORDER_NONE;
+#endif
+    auto* b = new wxButton(parent, wxID_ANY, label, wxDefaultPosition, wxDefaultSize, style);
+    b->SetMinSize(wxSize(-1, parent->FromDIP(32)));
+    if (!art.empty()) {
+        b->SetBitmap(wxArtProvider::GetBitmap(art, wxART_BUTTON, parent->FromDIP(wxSize(16, 16))));
+        b->SetBitmapMargins(parent->FromDIP(8), 0);
+    }
     b->Bind(wxEVT_BUTTON, [action](wxCommandEvent&) { action(); });
     sizer->Add(b, 0, wxEXPAND | wxTOP | wxBOTTOM, 3);
     return b;
@@ -176,7 +187,17 @@ void ExplorerFrame::breadcrumbs() {
     auto add = [this](const fs::path& p, const wxString& label) {
         wxString caption = label.length() > 24 ? label.Left(21) + wxS("\u2026") : label;
         caption.Replace("&", "&&");
-        auto* b = new wxButton(crumbs, wxID_ANY, caption, wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT | wxBORDER_NONE);
+        long style = wxBU_EXACTFIT;
+#ifndef __WXMSW__
+        style |= wxBORDER_NONE;
+#endif
+        auto* b = new wxButton(crumbs, wxID_ANY, caption, wxDefaultPosition, wxDefaultSize, style);
+        if (p == current) b->SetFont(b->GetFont().Bold());
+        b->SetBitmap(wxArtProvider::GetBitmap(p == p.root_path() ? wxART_HARDDISK : wxART_FOLDER,
+                                            wxART_BUTTON, crumbs->FromDIP(wxSize(16, 16))));
+        b->SetBitmapMargins(crumbs->FromDIP(6), 0);
+        const auto best = b->GetBestSize();
+        b->SetMinSize(wxSize(best.x + crumbs->FromDIP(12), std::max(best.y, crumbs->FromDIP(30))));
         b->SetToolTip(text(p)); b->Bind(wxEVT_BUTTON, [this, p](wxCommandEvent&) { navigate(p); });
         crumbSizer->Add(b, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 3);
     };
@@ -535,7 +556,22 @@ ExplorerFrame::ExplorerFrame(const fs::path& initial) : wxFrame(nullptr, wxID_AN
         std::error_code ec;
         if (fs::is_directory(target, ec)) button(side, sideSizer, folder, [this, target] { navigate(target); }, wxART_FOLDER);
     }
-    button(side, sideSizer, "File system", [this] { navigate(current.root_path()); }, wxART_HARDDISK);
+#ifdef __WXMSW__
+    // List drive roots explicitly: the previous shortcut silently followed the current drive.
+    section(sideSizer, "DRIVES");
+    const DWORD drives = GetLogicalDrives();
+    for (unsigned letter = 0; letter < 26; ++letter) {
+        if (!(drives & (DWORD(1) << letter))) continue;
+        const wxString rootPath = wxString::Format("%c:\\", 'A' + letter);
+        const auto target = pathOf(rootPath);
+        auto* drive = button(side, sideSizer, wxString::Format("Drive (%c:)", 'A' + letter),
+                             [this, target] { navigate(target); }, wxART_HARDDISK);
+        drive->SetToolTip("Open " + rootPath);
+    }
+#else
+    auto* filesystem = button(side, sideSizer, "File system (/)", [this] { navigate(fs::path("/")); }, wxART_HARDDISK);
+    filesystem->SetToolTip("Open the root folder (/)");
+#endif
     section(sideSizer, "DETAILS");
     selection = new wxStaticText(side, wxID_ANY, "Select a file or folder\nto view its details.");
     sideSizer->Add(selection, 0, wxEXPAND | wxTOP, 6);
