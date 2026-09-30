@@ -60,7 +60,7 @@ startup behavior and do not compile the Windows shell sources.
 
 ```text
 +-----------------------------------------------------------------------+
-| Windows icon | Folder icon | App window | App window | ... | Window grid | Network | Sound | Time / date       |
+| Windows icon | Folder icon | App window | App window | ... | Window grid | Network icon | Speaker icon | Time / date       |
 +-----------------------------------------------------------------------+
 ```
 
@@ -80,6 +80,8 @@ startup behavior and do not compile the Windows shell sources.
   the standard Windows folder icon. The **All windows** button shows an outlined window-grid icon. All three scale
   with system DPI, keep accessible names and show their labels as tooltips.
   The clock shows local 24-hour `HH:mm` time above the date in `DD.MM.YYYY` format.
+- The **Network** and **Sound** buttons show DPI-scaled network and speaker icons,
+  with accessible names and tooltips.
 - **Network** beside Sound opens Windows network settings. Right-click it for
   Wi-Fi settings, Ethernet settings or the classic network adapter panel.
 - **Sound** beside the clock opens the Windows volume mixer to adjust volume and mute.

@@ -31,7 +31,7 @@ std::vector<Item> apps, desktopItems;
 bool registered = false, positioning = false, fullscreen = false;
 std::vector<HWND> taskButtons;
 HWND startButton{}, filesButton{}, moreButton{}, soundButton{}, networkButton{}, clockButton{};
-HICON startIcon{}, filesIcon{}, moreIcon{};
+HICON startIcon{}, filesIcon{}, moreIcon{}, soundIcon{}, networkIcon{};
 HWND taskTips{};
 void layoutButtons();
 UINT taskbarCreated{};
@@ -698,10 +698,59 @@ HICON makeStartIcon(int size, bool windows = false) {
     return icon;
 }
 
+HICON makeSettingsIcon(int size, bool network) {
+    BITMAPINFO dib{}; dib.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    dib.bmiHeader.biWidth = size; dib.bmiHeader.biHeight = -size;
+    dib.bmiHeader.biPlanes = 1; dib.bmiHeader.biBitCount = 32;
+    DWORD* pixels{};
+    HDC dc = CreateCompatibleDC(nullptr);
+    HBITMAP color = CreateDIBSection(dc, &dib, DIB_RGB_COLORS, reinterpret_cast<void**>(&pixels), nullptr, 0);
+    if (!dc || !color) { if (dc) DeleteDC(dc); if (color) DeleteObject(color); return nullptr; }
+    auto old = SelectObject(dc, color);
+    std::fill(pixels, pixels + size * size, 0);
+    HPEN pen = CreatePen(PS_SOLID, std::max(1, size / 12), RGB(40, 65, 90));
+    HBRUSH brush = CreateSolidBrush(RGB(40, 65, 90));
+    auto oldPen = SelectObject(dc, pen);
+    auto oldBrush = SelectObject(dc, network ? GetStockObject(NULL_BRUSH) : brush);
+    auto scaled = [size](int value) { return MulDiv(value, size, 24); };
+    if (network) {
+        Rectangle(dc, scaled(6), scaled(2), scaled(18), scaled(11));
+        MoveToEx(dc, scaled(12), scaled(11), nullptr); LineTo(dc, scaled(12), scaled(16));
+        MoveToEx(dc, scaled(4), scaled(19), nullptr); LineTo(dc, scaled(4), scaled(16));
+        LineTo(dc, scaled(20), scaled(16)); LineTo(dc, scaled(20), scaled(19));
+        Rectangle(dc, scaled(1), scaled(19), scaled(7), scaled(23));
+        Rectangle(dc, scaled(17), scaled(19), scaled(23), scaled(23));
+    } else {
+        POINT speaker[] = {{scaled(2), scaled(9)}, {scaled(7), scaled(9)},
+            {scaled(12), scaled(4)}, {scaled(12), scaled(20)},
+            {scaled(7), scaled(15)}, {scaled(2), scaled(15)}};
+        Polygon(dc, speaker, 6);
+        SelectObject(dc, GetStockObject(NULL_BRUSH));
+        Arc(dc, scaled(10), scaled(6), scaled(19), scaled(18), scaled(15), scaled(18), scaled(15), scaled(6));
+        Arc(dc, scaled(9), scaled(2), scaled(23), scaled(22), scaled(17), scaled(22), scaled(17), scaled(2));
+    }
+    GdiFlush();
+    for (int i = 0; i < size * size; ++i) if (pixels[i] & 0x00ffffff) pixels[i] |= 0xff000000;
+    const int stride = ((size + 15) / 16) * 2;
+    std::vector<BYTE> maskBits(stride * size, 0xff);
+    for (int y = 0; y < size; ++y) for (int x = 0; x < size; ++x)
+        if (pixels[y * size + x] >> 24) maskBits[y * stride + x / 8] &= static_cast<BYTE>(~(0x80 >> (x % 8)));
+    HBITMAP mask = CreateBitmap(size, size, 1, 1, maskBits.data());
+    ICONINFO info{}; info.fIcon = TRUE; info.hbmColor = color; info.hbmMask = mask;
+    HICON icon = mask ? CreateIconIndirect(&info) : nullptr;
+    SelectObject(dc, oldBrush); SelectObject(dc, oldPen); SelectObject(dc, old);
+    DeleteObject(brush); DeleteObject(pen); DeleteDC(dc);
+    if (mask) DeleteObject(mask);
+    DeleteObject(color);
+    return icon;
+}
+
 void setLauncherIcons() {
     const int size = MulDiv(24, dpi, 96);
     startIcon = makeStartIcon(size);
     moreIcon = makeStartIcon(size, true);
+    soundIcon = makeSettingsIcon(size, false);
+    networkIcon = makeSettingsIcon(size, true);
     SHSTOCKICONINFO stock{}; stock.cbSize = sizeof(stock);
     if (SUCCEEDED(SHGetStockIconInfo(SIID_FOLDER, SHGSI_ICON | SHGSI_LARGEICON, &stock))) {
         filesIcon = static_cast<HICON>(CopyImage(stock.hIcon, IMAGE_ICON, size, size, 0));
@@ -729,6 +778,8 @@ void setLauncherIcons() {
     attach(startButton, startIcon, L"Start");
     attach(filesButton, filesIcon, L"Files");
     attach(moreButton, moreIcon, L"All windows");
+    attach(soundButton, soundIcon, L"Sound: volume mixer (right-click for settings)");
+    attach(networkButton, networkIcon, L"Network: settings (right-click for Wi-Fi and adapters)");
 }
 
 HWND makeButton(int id, const wchar_t* title, bool task = false) {
@@ -930,10 +981,14 @@ LRESULT CALLBACK barProc(HWND window, UINT message, WPARAM w, LPARAM l) {
         SendMessageW(startButton, BM_SETIMAGE, IMAGE_ICON, 0);
         SendMessageW(filesButton, BM_SETIMAGE, IMAGE_ICON, 0);
         SendMessageW(moreButton, BM_SETIMAGE, IMAGE_ICON, 0);
+        SendMessageW(soundButton, BM_SETIMAGE, IMAGE_ICON, 0);
+        SendMessageW(networkButton, BM_SETIMAGE, IMAGE_ICON, 0);
+        if (soundIcon) DestroyIcon(soundIcon);
+        if (networkIcon) DestroyIcon(networkIcon);
         if (moreIcon) DestroyIcon(moreIcon);
         if (startIcon) DestroyIcon(startIcon);
         if (filesIcon) DestroyIcon(filesIcon);
-        startIcon = filesIcon = moreIcon = nullptr;
+        startIcon = filesIcon = moreIcon = soundIcon = networkIcon = nullptr;
         for (HWND button : taskButtons) setTaskIcon(button, nullptr);
         clearMenuIcons();
         explorer::background::destroy();
@@ -1020,7 +1075,9 @@ int runWindowsShell(HINSTANCE instance, bool smokeTest) {
         passed = passed && explorer::background::visible();
         passed = passed && (registered || manualWorkArea) && rect.bottom == originalMonitor.rcMonitor.bottom && startButton && filesButton && moreButton && soundButton && networkButton && clockButton &&
             IsWindowVisible(bar) && !isTask(bar) && rect.bottom > rect.top;
-        passed = passed && startIcon && filesIcon && moreIcon &&
+        passed = passed && startIcon && filesIcon && moreIcon && soundIcon && networkIcon &&
+            SendMessageW(soundButton, BM_GETIMAGE, IMAGE_ICON, 0) == reinterpret_cast<LRESULT>(soundIcon) &&
+            SendMessageW(networkButton, BM_GETIMAGE, IMAGE_ICON, 0) == reinterpret_cast<LRESULT>(networkIcon) &&
             SendMessageW(startButton, BM_GETIMAGE, IMAGE_ICON, 0) == reinterpret_cast<LRESULT>(startIcon) &&
             SendMessageW(filesButton, BM_GETIMAGE, IMAGE_ICON, 0) == reinterpret_cast<LRESULT>(filesIcon) &&
             SendMessageW(moreButton, BM_GETIMAGE, IMAGE_ICON, 0) == reinterpret_cast<LRESULT>(moreIcon) &&
