@@ -32,6 +32,7 @@ class ExplorerSmokeTest final : public wxApp {
         wxMenu menu;
         frame->populateFileMenu(menu);
         require(menu.FindItem(CopyFiles) && menu.FindItem(CutFiles) && menu.FindItem(PasteFiles), "context menu contains all clipboard actions");
+        require(menu.FindItem(CompressZip) && menu.FindItem(ExtractZip) && menu.FindItem(RefreshFolder) && menu.FindItem(OpenContaining), "context menu contains archive and navigation actions");
         require(menu.IsEnabled(id), "context action enabled");
         wxCommandEvent event(wxEVT_MENU, id);
         event.SetEventObject(&menu);

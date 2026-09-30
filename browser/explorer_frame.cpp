@@ -1,4 +1,7 @@
 #include "explorer_frame.h"
+#include "archives.h"
+#include <wx/filedlg.h>
+#include <wx/dirdlg.h>
 
 wxString text(const fs::path& path) { return wxString::FromUTF8(path.u8string()); }
 fs::path pathOf(const wxString& value) { return fs::u8path(value.ToUTF8().data()); }
@@ -371,6 +374,33 @@ void ExplorerFrame::pasteFiles() {
     else SetStatusText(wxString::Format("Pasted %zu item(s).", completed));
 }
 
+void ExplorerFrame::archiveSelected(bool extract) {
+    const auto paths = selectedPaths();
+    if (paths.empty()) return;
+    fs::path destination;
+    if (extract) {
+        if (paths.size() != 1 || explorer::lower(paths.front().extension().u8string()) != ".zip") return;
+        wxDirDialog dialog(this, "Extract ZIP into a new folder", text(paths.front().parent_path() / paths.front().stem()));
+        if (dialog.ShowModal() != wxID_OK) return;
+        destination = pathOf(dialog.GetPath());
+    } else {
+        wxFileDialog dialog(this, "Compress to ZIP", text(current),
+                            text(paths.size() == 1 ? paths.front().filename() : fs::path("Archive")) + ".zip",
+                            "ZIP archives (*.zip)|*.zip", wxFD_SAVE);
+        if (dialog.ShowModal() != wxID_OK) return;
+        destination = pathOf(dialog.GetPath());
+        if (explorer::lower(destination.extension().u8string()) != ".zip") destination += ".zip";
+    }
+    try {
+        wxProgressDialog progress(extract ? "Extracting ZIP" : "Creating ZIP", "Preparing...", 100, this,
+                                  wxPD_APP_MODAL | wxPD_CAN_ABORT | wxPD_ELAPSED_TIME);
+        auto update = [&](const fs::path& path) { return progress.Pulse(text(path)); };
+        if (extract) explorer::extractZip(paths.front(), destination, update);
+        else explorer::createZip(paths, destination, update);
+    } catch (const std::exception& exception) { error(wxString::FromUTF8(exception.what())); }
+    scan();
+}
+
 void ExplorerFrame::prepareContextSelection(long row) {
     if (row >= 0 && !(list->GetItemState(row, wxLIST_STATE_SELECTED) & wxLIST_STATE_SELECTED)) {
         list->SetItemState(-1, 0, wxLIST_STATE_SELECTED);
@@ -390,6 +420,21 @@ void ExplorerFrame::populateFileMenu(wxMenu& menu) {
     menu.Append(NewFile, "New file...");
     menu.Append(NewFolder, "New folder"); menu.Append(CopyPath, "Copy path");
     menu.Append(Properties, "Properties");
+    menu.AppendSeparator();
+    menu.Append(CompressZip, "Compress to ZIP...");
+    menu.Append(ExtractZip, "Extract ZIP...");
+    menu.Append(OpenContaining, "Open containing folder");
+    const auto paths = selectedPaths();
+    menu.Enable(CompressZip, selected);
+    menu.Enable(ExtractZip, paths.size() == 1 && explorer::lower(paths.front().extension().u8string()) == ".zip");
+    menu.Enable(OpenContaining, paths.size() == 1);
+    menu.AppendSeparator();
+    menu.Append(RefreshFolder, "Refresh\tF5");
+    auto* view = new wxMenu;
+    view->AppendRadioItem(Details, "Details");
+    view->AppendRadioItem(Icons, "Large icons");
+    view->Check(iconView ? Icons : Details, true);
+    menu.AppendSubMenu(view, "View");
     for (int id : {static_cast<int>(wxID_OPEN), static_cast<int>(Rename), static_cast<int>(CutFiles),
                    static_cast<int>(CopyFiles), static_cast<int>(DeleteFiles), static_cast<int>(Properties)}) menu.Enable(id, selected);
     menu.Bind(wxEVT_MENU, [this](wxCommandEvent& event) {
@@ -425,6 +470,9 @@ void ExplorerFrame::command(int id, bool fileAction) {
     case RefreshFolder: scan(); break;
     case NewFolder: newFolder(); break;
     case NewFile: newFile(); break;
+    case CompressZip: archiveSelected(false); break;
+    case ExtractZip: archiveSelected(true); break;
+    case OpenContaining: if (auto* entry = selectedEntry()) navigate(entry->path.parent_path()); break;
     case DeleteFiles: deleteSelected(); break;
     case Rename: renameSelected(); break;
     case Properties: properties(); break;

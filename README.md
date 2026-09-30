@@ -22,6 +22,8 @@ startup. Full Explorer replacement and third-party tray hosting remain pending.
 - New file creates an empty file with an editable name and extension (default `New file.txt`). Available from File, the toolbar, the context menu, or Ctrl+N.
 - Delete is available from File, the toolbar, the context menu, or the Delete key in the file list. It counts all selected items and their contents (including hidden items), shows their total size, and asks before permanently deleting. It does not use Trash/Recycle Bin or follow folder symlinks. Large operations show cancellable progress; cancelling deletion may leave a partly deleted selection.
 - Hidden dotfiles toggle, new folder, rename, copy path, properties and a right-click item menu.
+- Right-click selected files/folders to **Compress to ZIP...**, or a single ZIP to **Extract ZIP...** into a new folder. Archive output names must be unused; extraction rejects unsafe paths and cleans up incomplete output on error or cancellation. Compression preserves empty folders and does not follow symbolic links. No external archive utility is required.
+- The right-click menu also offers **Open containing folder** (useful for search results), **Refresh**, and a **View** submenu for Details / Large icons.
 - Native theme icons and controls, alternating detail rows, status bar and keyboard navigation.
 
 ## Build

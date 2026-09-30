@@ -30,7 +30,7 @@ wxString kind(const Entry& entry);
 wxString dateOf(const Entry& entry);
 wxDECLARE_EVENT(EVT_SCAN_DONE, wxThreadEvent);
 enum { Back = wxID_HIGHEST + 1, Forward, Up, Home, RefreshFolder, NewFolder, Rename,
-       CopyPath, Properties, Hidden, Details, Icons, FocusAddress, FocusSearch, StopSearch, CutFiles, CopyFiles, PasteFiles, DeleteFiles, NewFile };
+       CopyPath, Properties, Hidden, Details, Icons, FocusAddress, FocusSearch, StopSearch, CutFiles, CopyFiles, PasteFiles, DeleteFiles, NewFile, CompressZip, ExtractZip, OpenContaining };
 
 class ExplorerFrame final : public wxFrame {
     friend class ExplorerSmokeTest;
@@ -74,6 +74,7 @@ class ExplorerFrame final : public wxFrame {
     void newFolder();
     bool createFileNamed(const wxString& name);
     void newFile();
+    void archiveSelected(bool extract);
     void deleteSelected();
     std::vector<fs::path> selectedPaths() const;
     void copyFiles(bool cut);
