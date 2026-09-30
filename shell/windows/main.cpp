@@ -21,7 +21,7 @@
 namespace fs = std::filesystem;
 namespace {
 constexpr UINT AppbarMessage = WM_APP + 1, TrayMessage = WM_APP + 2;
-constexpr int Start = 100, Files = 101, Desktop = 102, More = 103, Exit = 104, Clock = 107, Background = 108, BackgroundFolder = 109, Shutdown = 110, Restart = 111;
+constexpr int Start = 100, Files = 101, Desktop = 102, More = 103, Exit = 104, Clock = 107, Background = 108, BackgroundFolder = 109, Shutdown = 110, Restart = 111, Sound = 112, Network = 113;
 constexpr int AppFirst = 1000, WindowFirst = 10000;
 struct Item { std::wstring label; fs::path path; };
 struct Task { HWND window; std::wstring title; };
@@ -30,7 +30,7 @@ std::vector<Task> tasks;
 std::vector<Item> apps, desktopItems;
 bool registered = false, positioning = false, fullscreen = false;
 std::vector<HWND> taskButtons;
-HWND startButton{}, filesButton{}, moreButton{}, clockButton{};
+HWND startButton{}, filesButton{}, moreButton{}, soundButton{}, networkButton{}, clockButton{};
 HICON startIcon{}, filesIcon{}, moreIcon{};
 HWND taskTips{};
 void layoutButtons();
@@ -300,6 +300,60 @@ fs::path knownFolder(REFKNOWNFOLDERID id) {
 void launch(const fs::path& path, const wchar_t* args = nullptr) {
     if (reinterpret_cast<INT_PTR>(ShellExecuteW(bar, L"open", path.c_str(), args, nullptr, SW_SHOWNORMAL)) <= 32)
         MessageBoxW(bar, L"Windows could not open this item.", L"Explorer companion", MB_OK | MB_ICONERROR);
+}
+
+void openVolumeMixer() {
+    wchar_t system[MAX_PATH]{};
+    if (GetSystemDirectoryW(system, MAX_PATH)) launch(fs::path(system) / L"SndVol.exe");
+    else MessageBoxW(bar, L"Windows could not locate the volume mixer.", L"Sound", MB_OK | MB_ICONERROR);
+}
+
+void soundMenu(LPARAM position) {
+    HMENU popup = CreatePopupMenu();
+    AppendMenuW(popup, MF_STRING, 1, L"Volume mixer");
+    AppendMenuW(popup, MF_STRING, 2, L"Sound settings");
+    AppendMenuW(popup, MF_STRING, 3, L"Playback and recording devices");
+    POINT point{static_cast<short>(LOWORD(position)), static_cast<short>(HIWORD(position))};
+    if (position == -1) {
+        RECT rect{}; GetWindowRect(soundButton, &rect);
+        point = {rect.left, rect.top};
+    }
+    SetForegroundWindow(bar);
+    const UINT command = TrackPopupMenu(popup, TPM_RETURNCMD | TPM_RIGHTBUTTON,
+        point.x, point.y, 0, bar, nullptr);
+    DestroyMenu(popup);
+    if (command == 1) openVolumeMixer();
+    else if (command == 2) launch(L"ms-settings:sound");
+    else if (command == 3) {
+        wchar_t system[MAX_PATH]{};
+        if (GetSystemDirectoryW(system, MAX_PATH)) launch(fs::path(system) / L"control.exe", L"mmsys.cpl");
+    }
+    PostMessageW(bar, WM_NULL, 0, 0);
+}
+
+void networkMenu(LPARAM position) {
+    HMENU popup = CreatePopupMenu();
+    AppendMenuW(popup, MF_STRING, 1, L"Network settings");
+    AppendMenuW(popup, MF_STRING, 2, L"Wi-Fi settings");
+    AppendMenuW(popup, MF_STRING, 3, L"Ethernet settings");
+    AppendMenuW(popup, MF_STRING, 4, L"Network adapters");
+    POINT point{static_cast<short>(LOWORD(position)), static_cast<short>(HIWORD(position))};
+    if (position == -1) {
+        RECT rect{}; GetWindowRect(networkButton, &rect);
+        point = {rect.left, rect.top};
+    }
+    SetForegroundWindow(bar);
+    const UINT command = TrackPopupMenu(popup, TPM_RETURNCMD | TPM_RIGHTBUTTON,
+        point.x, point.y, 0, bar, nullptr);
+    DestroyMenu(popup);
+    if (command == 1) launch(L"ms-settings:network-status");
+    else if (command == 2) launch(L"ms-settings:network-wifi");
+    else if (command == 3) launch(L"ms-settings:network-ethernet");
+    else if (command == 4) {
+        wchar_t system[MAX_PATH]{};
+        if (GetSystemDirectoryW(system, MAX_PATH)) launch(fs::path(system) / L"control.exe", L"ncpa.cpl");
+    }
+    PostMessageW(bar, WM_NULL, 0, 0);
 }
 
 void openBrowser(const fs::path& folder = {}) {
@@ -747,7 +801,9 @@ void layoutButtons() {
     }
     MoveWindow(startButton, 0, 0, layout.start, height, TRUE);
     MoveWindow(filesButton, layout.start, 0, layout.files, height, TRUE);
-    MoveWindow(moreButton, width - layout.more - layout.clock, 0, layout.more, height, TRUE);
+    MoveWindow(moreButton, width - layout.more - layout.network - layout.sound - layout.clock, 0, layout.more, height, TRUE);
+    MoveWindow(networkButton, width - layout.network - layout.sound - layout.clock, 0, layout.network, height, TRUE);
+    MoveWindow(soundButton, width - layout.sound - layout.clock, 0, layout.sound, height, TRUE);
     MoveWindow(clockButton, width - layout.clock, 0, layout.clock, height, TRUE);
     HWND foreground = GetForegroundWindow();
     for (size_t i = 0; i < taskButtons.size(); ++i) {
@@ -845,12 +901,18 @@ LRESULT CALLBACK barProc(HWND window, UINT message, WPARAM w, LPARAM l) {
         if (command == Start) menu(true);
         else if (command == Files) openBrowser();
         else if (command == More) windowMenu();
+        else if (command == Sound) openVolumeMixer();
+        else if (command == Network) launch(L"ms-settings:network-status");
         else if (command == Clock) launch(L"ms-settings:dateandtime");
         else if (command >= WindowFirst && command - WindowFirst < visibleTasks)
             activate(tasks[command - WindowFirst].window);
         return 0;
     }
-    case WM_CONTEXTMENU: menu(false); return 0;
+    case WM_CONTEXTMENU:
+        if (reinterpret_cast<HWND>(w) == soundButton) soundMenu(l);
+        else if (reinterpret_cast<HWND>(w) == networkButton) networkMenu(l);
+        else menu(false);
+        return 0;
     case WM_HOTKEY: if (w == 2) { explorer::spotlight::toggle(); return 0; } priorForeground = GetForegroundWindow(); SetForegroundWindow(bar); SetFocus(startButton); return 0;
     case TrayMessage:
         if (l == WM_RBUTTONUP || l == WM_CONTEXTMENU) menu(false);
@@ -937,6 +999,8 @@ int runWindowsShell(HINSTANCE instance, bool smokeTest) {
     startButton = makeButton(Start, L"Start");
     filesButton = makeButton(Files, L"Files");
     moreButton = makeButton(More, L"All windows");
+    soundButton = makeButton(Sound, L"Sound");
+    networkButton = makeButton(Network, L"Network");
     setLauncherIcons();
     clockButton = makeButton(Clock, L"Clock");
     SetWindowLongPtrW(clockButton, GWL_STYLE, GetWindowLongPtrW(clockButton, GWL_STYLE) | BS_MULTILINE);
@@ -954,7 +1018,7 @@ int runWindowsShell(HINSTANCE instance, bool smokeTest) {
         passed = passed && !IsWindowVisible(background);
         explorer::background::toggle();
         passed = passed && explorer::background::visible();
-        passed = passed && (registered || manualWorkArea) && rect.bottom == originalMonitor.rcMonitor.bottom && startButton && filesButton && moreButton && clockButton &&
+        passed = passed && (registered || manualWorkArea) && rect.bottom == originalMonitor.rcMonitor.bottom && startButton && filesButton && moreButton && soundButton && networkButton && clockButton &&
             IsWindowVisible(bar) && !isTask(bar) && rect.bottom > rect.top;
         passed = passed && startIcon && filesIcon && moreIcon &&
             SendMessageW(startButton, BM_GETIMAGE, IMAGE_ICON, 0) == reinterpret_cast<LRESULT>(startIcon) &&

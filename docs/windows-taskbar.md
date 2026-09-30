@@ -60,7 +60,7 @@ startup behavior and do not compile the Windows shell sources.
 
 ```text
 +-----------------------------------------------------------------------+
-| Windows icon | Folder icon | App window | App window | ... | Window grid | Time / date       |
+| Windows icon | Folder icon | App window | App window | ... | Window grid | Network | Sound | Time / date       |
 +-----------------------------------------------------------------------+
 ```
 
@@ -80,6 +80,10 @@ startup behavior and do not compile the Windows shell sources.
   the standard Windows folder icon. The **All windows** button shows an outlined window-grid icon. All three scale
   with system DPI, keep accessible names and show their labels as tooltips.
   The clock shows local 24-hour `HH:mm` time above the date in `DD.MM.YYYY` format.
+- **Network** beside Sound opens Windows network settings. Right-click it for
+  Wi-Fi settings, Ethernet settings or the classic network adapter panel.
+- **Sound** beside the clock opens the Windows volume mixer to adjust volume and mute.
+  Right-click it for Sound settings or the classic playback/recording device panel.
 - **Files** launches this project's file browser.
 - **Start > Applications** lists user and public Start-menu shortcuts, grouped by
   initial letter (with numbers and symbols under #). Each entry shows its shortcut's application icon, with a generic icon

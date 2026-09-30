@@ -21,12 +21,12 @@ int main() {
         require(!eligible(hidden), "invisible window must be excluded");
         auto own = normal; own.excluded = true;
         require(!eligible(own), "shell's own windows must be excluded");
-        for (int width : {0, 100, 269, 270, 640, 1920, 3840}) {
+        for (int width : {0, 100, 424, 425, 640, 1920, 3840}) {
             for (unsigned dpi : {96u, 144u, 192u}) {
                 for (size_t count : {0u, 1u, 10u, 1000u}) {
                     auto l = layout(width, dpi, count);
                     require(l.count >= 0 && static_cast<size_t>(l.count) <= count, "invalid visible count");
-                    require(l.taskLeft() + l.count * l.taskWidth + l.more + l.clock <= width,
+                    require(l.taskLeft() + l.count * l.taskWidth + l.more + l.network + l.sound + l.clock <= width,
                         "task buttons overlap system controls");
                     if (l.count) require(l.taskWidth >= static_cast<int>(90 * dpi / 96), "task buttons too narrow");
                 }

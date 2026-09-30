@@ -13,19 +13,21 @@ inline bool eligible(const WindowTraits& value) {
         (!value.owned || value.appWindow) && !value.cloaked && value.titled;
 }
 struct Layout {
-    int start, files, more, clock, taskWidth, count;
+    int start, files, more, network, sound, clock, taskWidth, count;
     int taskLeft() const { return start + files; }
 };
 inline Layout layout(int width, unsigned dpi, size_t tasks) {
     width = std::max(0, width);
     auto scale = [dpi](int x) { return std::max(1, static_cast<int>(x * std::max(96u, dpi) / 96)); };
-    Layout result{scale(70), scale(70), scale(50), scale(100), 0, 0};
-    const int fixed = result.start + result.files + result.more + result.clock;
+    Layout result{scale(70), scale(70), scale(50), scale(75), scale(60), scale(100), 0, 0};
+    const int fixed = result.start + result.files + result.more + result.network + result.sound + result.clock;
     if (width < fixed) {
-        result.start = width * 70 / 290;
-        result.files = width * 70 / 290;
-        result.more = width * 50 / 290;
-        result.clock = width - result.start - result.files - result.more;
+        result.start = width * 70 / 425;
+        result.files = width * 70 / 425;
+        result.more = width * 50 / 425;
+        result.network = width * 75 / 425;
+        result.sound = width * 60 / 425;
+        result.clock = width - result.start - result.files - result.more - result.network - result.sound;
         return result;
     }
     const int available = width - fixed;
