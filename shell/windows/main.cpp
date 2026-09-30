@@ -1036,7 +1036,7 @@ int runWindowsShell(HINSTANCE instance, bool smokeTest) {
     cls.hbrBackground = nullptr; RegisterClassW(&cls);
     taskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
     bar = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_CONTROLPARENT, L"RexplorerTaskbar", L"Explorer taskbar companion",
-        WS_POPUP, 0, 0, 800, height, nullptr, nullptr, instance, nullptr);
+        WS_POPUP | WS_CLIPCHILDREN, 0, 0, 800, height, nullptr, nullptr, instance, nullptr);
     if (!bar || !registerBar()) {
         MessageBoxW(nullptr, L"The companion could not reserve taskbar space. Run it in a normal Windows desktop session.", L"Explorer", MB_OK | MB_ICONERROR);
         if (bar) DestroyWindow(bar);
@@ -1060,6 +1060,9 @@ int runWindowsShell(HINSTANCE instance, bool smokeTest) {
     clockButton = makeButton(Clock, L"Clock");
     SetWindowLongPtrW(clockButton, GWL_STYLE, GetWindowLongPtrW(clockButton, GWL_STYLE) | BS_MULTILINE);
     tray(); refreshTasks(); ShowWindow(bar, SW_SHOWNOACTIVATE);
+    // Paint the parent and its controls together on first display. The parent's
+    // WS_CLIPCHILDREN keeps subsequent background paints off the buttons.
+    RedrawWindow(bar, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
     if (!explorer::spotlight::create(instance, bar, dpi) && !smokeTest)
         MessageBoxW(bar, L"Search could not start. Alt+Space may already be registered by another application.", L"Search", MB_OK | MB_ICONWARNING);
     if (smokeTest) {
@@ -1075,6 +1078,15 @@ int runWindowsShell(HINSTANCE instance, bool smokeTest) {
         passed = passed && explorer::background::visible();
         passed = passed && (registered || manualWorkArea) && rect.bottom == originalMonitor.rcMonitor.bottom && startButton && filesButton && moreButton && soundButton && networkButton && clockButton &&
             IsWindowVisible(bar) && !isTask(bar) && rect.bottom > rect.top;
+        passed = passed && (GetWindowLongPtrW(bar, GWL_STYLE) & WS_CLIPCHILDREN);
+        RECT client{}; GetClientRect(bar, &client);
+        for (HWND button : {startButton, filesButton, moreButton, networkButton, soundButton, clockButton}) {
+            RECT bounds{}; GetWindowRect(button, &bounds);
+            MapWindowPoints(nullptr, bar, reinterpret_cast<POINT*>(&bounds), 2);
+            passed = passed && IsWindowVisible(button) && bounds.right > bounds.left &&
+                bounds.bottom > bounds.top && bounds.left >= client.left && bounds.right <= client.right &&
+                bounds.top >= client.top && bounds.bottom <= client.bottom;
+        }
         passed = passed && startIcon && filesIcon && moreIcon && soundIcon && networkIcon &&
             SendMessageW(soundButton, BM_GETIMAGE, IMAGE_ICON, 0) == reinterpret_cast<LRESULT>(soundIcon) &&
             SendMessageW(networkButton, BM_GETIMAGE, IMAGE_ICON, 0) == reinterpret_cast<LRESULT>(networkIcon) &&
