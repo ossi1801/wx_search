@@ -382,7 +382,7 @@ void showDesktop();
 void menu(bool launcher) {
     HMENU popup = CreatePopupMenu();
     AppendMenuW(popup, MF_STRING, Files, L"Open file browser");
-    AppendMenuW(popup, MF_STRING, Desktop, L"Desktop items");
+    AppendMenuW(popup, MF_STRING, Desktop, L"Refresh desktop icons");
     AppendMenuW(popup, MF_STRING | (explorer::background::visible() ? MF_CHECKED : MF_UNCHECKED),
         Background, L"Desktop background");
     AppendMenuW(popup, MF_STRING, BackgroundFolder, L"Open background folder");
@@ -447,11 +447,15 @@ void openDesktopSelection() {
 
 LRESULT CALLBACK desktopProc(HWND window, UINT message, WPARAM w, LPARAM l) {
     if (message == WM_CREATE) {
-        desktopList = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, nullptr,
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_ICON | LVS_SINGLESEL | LVS_AUTOARRANGE,
+        desktopList = CreateWindowExW(0, WC_LISTVIEWW, nullptr,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_ICON | LVS_SINGLESEL | LVS_AUTOARRANGE | LVS_ALIGNLEFT | LVS_SHAREIMAGELISTS,
             0, 0, 500, 400, window, reinterpret_cast<HMENU>(1), GetModuleHandleW(nullptr), nullptr);
         SendMessageW(desktopList, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
-        ListView_SetExtendedListViewStyle(desktopList, LVS_EX_DOUBLEBUFFER);
+        ListView_SetExtendedListViewStyle(desktopList, LVS_EX_DOUBLEBUFFER | LVS_EX_TRANSPARENTBKGND);
+        ListView_SetBkColor(desktopList, CLR_NONE);
+        ListView_SetTextBkColor(desktopList, CLR_NONE);
+        ListView_SetTextColor(desktopList, RGB(255, 255, 255));
+        ListView_SetIconSpacing(desktopList, MulDiv(96, dpi, 96), MulDiv(88, dpi, 96));
         SHFILEINFOW info{};
         auto images = reinterpret_cast<HIMAGELIST>(SHGetFileInfoW(L"file.txt", FILE_ATTRIBUTE_NORMAL, &info, sizeof(info),
             SHGFI_SYSICONINDEX | SHGFI_LARGEICON | SHGFI_USEFILEATTRIBUTES));
@@ -460,6 +464,9 @@ LRESULT CALLBACK desktopProc(HWND window, UINT message, WPARAM w, LPARAM l) {
         SetWindowLongPtrW(desktopList, GWL_STYLE, GetWindowLongPtrW(desktopList, GWL_STYLE) | LVS_SHAREIMAGELISTS);
         return 0;
     }
+    if (message == WM_MOUSEACTIVATE) return MA_ACTIVATE;
+    if (message == WM_ERASEBKGND || message == WM_PRINTCLIENT)
+        return SendMessageW(GetParent(window), WM_PRINTCLIENT, w, PRF_CLIENT);
     if (message == WM_SIZE) { MoveWindow(desktopList, 0, 0, LOWORD(l), HIWORD(l), TRUE); return 0; }
     if (message == WM_NOTIFY) {
         auto notification = reinterpret_cast<NMHDR*>(l);
@@ -467,7 +474,8 @@ LRESULT CALLBACK desktopProc(HWND window, UINT message, WPARAM w, LPARAM l) {
             openDesktopSelection();
         return 0;
     }
-    if (message == WM_CLOSE) { ShowWindow(window, SW_HIDE); return 0; }
+    if (message == WM_CLOSE) return 0;
+    if (message == WM_DESTROY) { desktop = nullptr; desktopList = nullptr; return 0; }
     return DefWindowProcW(window, message, w, l);
 }
 
@@ -475,10 +483,14 @@ void showDesktop() {
     desktopItems.clear();
     readItems(knownFolder(FOLDERID_Desktop), false, desktopItems);
     readItems(knownFolder(FOLDERID_PublicDesktop), false, desktopItems);
+    HWND surface = explorer::background::handle();
+    if (!surface) return;
     if (!desktop) {
-        desktop = CreateWindowExW(0, L"RexplorerDesktop", L"Desktop items — Explorer companion",
-            WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 600, 450, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+        RECT client{}; GetClientRect(surface, &client);
+        desktop = CreateWindowExW(WS_EX_CONTROLPARENT, L"RexplorerDesktop", L"Desktop icons",
+            WS_CHILD | WS_VISIBLE, 0, 0, client.right, client.bottom, surface, nullptr, GetModuleHandleW(nullptr), nullptr);
     }
+    if (!desktop || !desktopList) return;
     ListView_DeleteAllItems(desktopList);
     for (size_t i = 0; i < desktopItems.size(); ++i) {
         SHFILEINFOW info{};
@@ -487,7 +499,7 @@ void showDesktop() {
         item.pszText = desktopItems[i].label.data(); item.iImage = info.iIcon;
         ListView_InsertItem(desktopList, &item);
     }
-    ShowWindow(desktop, SW_RESTORE); SetForegroundWindow(desktop); SetFocus(desktopList);
+    ShowWindow(desktop, SW_SHOWNOACTIVATE);
 }
 
 LRESULT CALLBACK taskButtonProc(HWND button, UINT message, WPARAM w, LPARAM l, UINT_PTR id, DWORD_PTR data) {
@@ -799,7 +811,7 @@ int runWindowsShell(HINSTANCE instance, bool smokeTest) {
     cls.lpfnWndProc = barProc; cls.lpszClassName = L"RexplorerTaskbar";
     RegisterClassW(&cls);
     cls.lpfnWndProc = desktopProc; cls.lpszClassName = L"RexplorerDesktop";
-    cls.hbrBackground = GetSysColorBrush(COLOR_WINDOW); RegisterClassW(&cls);
+    cls.hbrBackground = nullptr; RegisterClassW(&cls);
     taskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
     bar = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_CONTROLPARENT, L"RexplorerTaskbar", L"Explorer taskbar companion",
         WS_POPUP, 0, 0, 800, height, nullptr, nullptr, instance, nullptr);
@@ -813,6 +825,7 @@ int runWindowsShell(HINSTANCE instance, bool smokeTest) {
     }
     HWND foregroundBeforeBackground = GetForegroundWindow();
     const bool backgroundCreated = explorer::background::create(instance);
+    showDesktop();
     const bool backgroundKeptFocus = GetForegroundWindow() == foregroundBeforeBackground;
     if (!backgroundCreated && !smokeTest)
         MessageBoxW(bar, L"The desktop background could not be created.", L"Explorer companion", MB_OK | MB_ICONERROR);
@@ -869,7 +882,10 @@ int runWindowsShell(HINSTANCE instance, bool smokeTest) {
         apps.clear();
         passed = smokeBrowserProcess() && passed;
         showDesktop();
-        passed = passed && desktop && desktopList && IsWindowVisible(desktop) && !isTask(desktop);
+        RECT desktopRect{}; GetWindowRect(desktop, &desktopRect);
+        passed = passed && desktop && desktopList && IsWindowVisible(desktop) && !isTask(desktop) &&
+            GetParent(desktop) == background && (GetWindowLongPtrW(desktop, GWL_STYLE) & WS_CHILD) &&
+            !(GetWindowLongPtrW(desktop, GWL_STYLE) & WS_CAPTION) && EqualRect(&desktopRect, &backgroundRect);
         DestroyWindow(bar);
         MONITORINFO after{}; after.cbSize = sizeof(after);
         GetMonitorInfoW(MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY), &after);

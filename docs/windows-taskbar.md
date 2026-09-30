@@ -99,11 +99,14 @@ startup behavior and do not compile the Windows shell sources.
   The visible background checks the folder once per second and reloads when the
   selected filename, file size or modification time changes. Adding, replacing or
   removing an image requires no restart. A hidden background updates when shown.
-  It starts enabled, has no icons or controls, and ignores clicks without taking
-  keyboard focus. Hiding it exposes the original desktop; exiting destroys it.
+  It starts enabled with desktop icons. Empty wallpaper ignores clicks without
+  taking keyboard focus; icons accept mouse and keyboard input. Hiding it also
+  hides the icons; exiting destroys the surface.
   The existing Windows wallpaper setting is not changed.
-- **Start > Desktop items** opens a windowed icon view of the user and public
-  desktop folders. Double-click or press Enter to open the selected item.
+- Icons from the user and public desktop folders appear directly on the primary
+  desktop at startup, beneath application windows and above the wallpaper.
+  Double-click or press Enter to open the selected item. **Start > Refresh desktop
+  icons** reloads the folders without opening a separate window.
 - Start also provides Windows Settings, Task Manager and Exit companion.
 - The clock opens Windows date/time settings.
 - Ctrl+Alt+Space focuses the companion, then Tab/Shift+Tab and Space operate its
@@ -197,8 +200,8 @@ surface is repositioned on display/work-area changes and the one-second refresh.
 It uses [non-activating window styles](https://learn.microsoft.com/en-us/windows/win32/winmsg/extended-window-styles)
 and [SetWindowPos](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowpos).
 Background selection uses the background folder; there is no wallpaper file
-picker, desktop drag-and-drop or persistent icon positioning. The separate Desktop items command still opens an interactive preview
-window; the background itself has no interactive content. Other
+picker, desktop drag-and-drop or persistent icon positioning. Desktop icons
+auto-arrange in columns on the background surface. Other
 applications' tray icons, system flyouts and notification history are unavailable
 while Explorer is stopped. Session startup and crash recovery still require
 the compatibility work in [the shell plan](windows-shell-plan.md).

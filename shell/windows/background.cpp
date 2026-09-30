@@ -65,7 +65,7 @@ void refreshImage() {
     pixels.clear();
     imageInfo = {};
     if (!selected.path.empty()) loadImage(selected.path);
-    InvalidateRect(surface, nullptr, FALSE);
+    RedrawWindow(surface, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
 }
 
 // Keep normal application windows above the surface. Explorer's desktop hosts
@@ -84,6 +84,11 @@ BOOL CALLBACK findLastApplication(HWND window, LPARAM value) {
 LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM w, LPARAM l) {
     switch (message) {
     case WM_MOUSEACTIVATE: return MA_NOACTIVATEANDEAT;
+    case WM_SIZE: {
+        HWND child = GetWindow(window, GW_CHILD);
+        if (child) MoveWindow(child, 0, 0, LOWORD(l), HIWORD(l), TRUE);
+        return 0;
+    }
     case WM_CONTEXTMENU:
     case WM_LBUTTONDOWN:
     case WM_LBUTTONUP:
@@ -91,16 +96,19 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM w, LPARAM l) {
     case WM_RBUTTONUP:
     case WM_CLOSE: return 0;
     case WM_ERASEBKGND: return 1;
+    case WM_PRINTCLIENT:
     case WM_PAINT: {
-        PAINTSTRUCT paint{}; HDC dc = BeginPaint(window, &paint);
+        PAINTSTRUCT paint{};
+        HDC dc = message == WM_PAINT ? BeginPaint(window, &paint) : reinterpret_cast<HDC>(w);
         RECT client{}; GetClientRect(window, &client);
+        if (message == WM_PRINTCLIENT) paint.rcPaint = client;
         if (!pixels.empty()) {
             SetStretchBltMode(dc, HALFTONE);
             SetBrushOrgEx(dc, 0, 0, nullptr);
             const int drawn = StretchDIBits(dc, 0, 0, client.right, client.bottom, 0, 0,
                 imageInfo.bmiHeader.biWidth, -imageInfo.bmiHeader.biHeight,
                 pixels.data(), &imageInfo, DIB_RGB_COLORS, SRCCOPY);
-            if (drawn != 0 && static_cast<DWORD>(drawn) != GDI_ERROR) { EndPaint(window, &paint); return 0; }
+            if (drawn != 0 && static_cast<DWORD>(drawn) != GDI_ERROR) { if (message == WM_PAINT) EndPaint(window, &paint); return 0; }
         }
         const int height = std::max(1L, client.bottom);
         // Blue placeholder when no supported image can be decoded.
@@ -112,7 +120,8 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM w, LPARAM l) {
             RECT band{paint.rcPaint.left, y, paint.rcPaint.right, std::min(y + 2, static_cast<int>(paint.rcPaint.bottom))};
             FillRect(dc, &band, static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
         }
-        EndPaint(window, &paint); return 0;
+        if (message == WM_PAINT) EndPaint(window, &paint);
+        return 0;
     }
     }
     return DefWindowProcW(window, message, w, l);
